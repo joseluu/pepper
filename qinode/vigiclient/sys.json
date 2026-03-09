@@ -1,0 +1,55 @@
+{
+  "SECUREMOTEPORT": "443",
+  "LOGFILE": "/data/vigiclient/vigiclient.log",
+  "VIDEOLOCALPORT": 9998,
+  "AUDIOLOCALPORT": 9999,
+  "V4L2": "/usr/bin/v4l2-ctl",
+  "TEMPFILE": "/sys/class/thermal/thermal_zone0/temp",
+  "WIFIFILE": "/proc/net/wireless",
+  "PCA9685FREQUENCY": 50,
+  "PCA9685ADDRESSES": [],
+  "PWMFREQUENCY": 100,
+  "CW2015ADDRESS": 0,
+  "MAX17043ADDRESS": 0,
+  "BQ27441ADDRESS": 0,
+  "INA219ADDRESS": 0,
+  "UNUSED": 999,
+  "SERVORATE": 50,
+  "CPURATE": 2000,
+  "TEMPRATE": 5000,
+  "WIFIRATE": 5000,
+  "GAUGERATE": 5000,
+  "BEACONRATE": 1000,
+  "TXRATE": 50,
+  "UPTIMEOUT": 5000,
+  "LATENCYALARMBEGIN": 300,
+  "LATENCYALARMEND": 200,
+  "SERIALPORTS": [
+    "/dev/ttyUSB0",
+    "/dev/ttyUSB1",
+    "/dev/ttyUSB2",
+    "/dev/ttyUSB3",
+    "/dev/ttyAMA0",
+    "/dev/ttyS0"
+  ],
+  "SERIALRATES": [
+    9600,
+    19200,
+    38400,
+    57600,
+    115200,
+    230400
+  ],
+  "NAOQIBRIDGE": "127.0.0.1",
+  "NAOQIBRIDGEPORT": 8002,
+  "SERVERS": [
+    "www.vigibot.com"
+  ],
+  "CMDDIFFUSION": [
+    [
+      "ffmpeg -f v4l2 -video_size WIDTHxHEIGHT -framerate FPS -i /dev/video-top -c:v libx264 -profile:v baseline -tune zerolatency -preset ultrafast -x264-params keyint=30:bframes=0:repeat-headers=1 -b:v BITRATEk -f h264 tcp://127.0.0.1:VIDEOLOCALPORT"
+    ]
+  ],
+  "CMDDIFFAUDIO": [],
+  "CMDTTS": "pico2wave -w /tmp/tts.wav 'TEXT' && aplay /tmp/tts.wav"
+}
