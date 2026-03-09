@@ -1,0 +1,45 @@
+# Build Python 3.5m for Pepper (NAOqiOS glibc 2.23, i686)
+# Uses Ubuntu 16.04 which has glibc 2.23 - exact match
+#
+# Usage:
+#   docker build -f Dockerfile.python35 -t python35_pepper .
+#   docker run --rm -v $(pwd)/python35_out:/out python35_pepper
+
+FROM i386/ubuntu:16.04
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    zlib1g-dev \
+    libffi-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libncurses5-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Download and build Python 3.5.10 (last 3.5.x release)
+RUN wget -q https://www.python.org/ftp/python/3.5.10/Python-3.5.10.tgz \
+    && tar xzf Python-3.5.10.tgz
+
+RUN cd Python-3.5.10 && \
+    ./configure \
+        --prefix=/opt/python3.5 \
+        --enable-shared \
+        --enable-optimizations \
+        --with-ensurepip=install \
+        LDFLAGS="-Wl,-rpath,/opt/python3.5/lib" \
+    && make -j$(nproc) \
+    && make install
+
+# Verify the build
+RUN /opt/python3.5/bin/python3.5 --version \
+    && ldd /opt/python3.5/bin/python3.5 \
+    && ldd /opt/python3.5/lib/libpython3.5m.so.1.0
+
+# Package it up
+CMD tar czf /out/python35_pepper.tar.gz -C /opt python3.5
