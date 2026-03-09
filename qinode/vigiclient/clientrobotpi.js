@@ -1,8 +1,8 @@
 "use strict";
 
-const VERSION = "vigibot 1.0";
+const VERSION = "vigibot 2.0";
 
-const USER = require("/data/vigiclient/robot.json");
+const USER = require("/home/nao/robot.json");
 const SYS = require("./sys.json");
 
 const FRAME = require("./trame.js");
@@ -10,6 +10,7 @@ const FRAME = require("./trame.js");
 const OS = require("os");
 const FS = require("fs");
 const IO = require("socket.io-client");
+const IO_LEGACY = require("socket.io-client-legacy");
 const EXEC = require("child_process").exec;
 const RL = require("readline");
 const NET = require("net");
@@ -19,7 +20,6 @@ const FRAME0 = "$".charCodeAt();
 const FRAME1S = "S".charCodeAt();
 const FRAME1T = "T".charCodeAt();
 
-const VERSION = Math.trunc(FS.statSync(__filename).mtimeMs);
 const PROCESSTIME = Date.now();
 const OSTIME = PROCESSTIME - OS.uptime() * 1000;
 
@@ -174,46 +174,53 @@ function exec(name, command, callback) {
  });
 }
 
-function naoqiCall(service, method, args) {
+// naoqiCall uses the v1.0 protocol: params.obj, params.method, params.args
+// For ServiceDirectory.service, obj="ServiceDirectory", method="service"
+// For service methods, obj=pyobject ID (number), method=method name
+function naoqiCall(obj, method, args) {
  return new Promise(function(resolve, reject) {
   if(!naoqiSocket) {
    reject(new Error("NAOqi not connected"));
    return;
   }
-  
+
   let idm = Math.floor(Math.random() * 1000000);
-  
+
   naoqiSocket.emit('call', {
    idm: idm,
    params: {
-    service: service,
+    obj: obj,
     method: method,
     args: args
    }
   });
-  
+
   let timeout = setTimeout(function() {
-   reject(new Error("NAOqi call timeout: " + service + "." + method));
-  }, 10000);
-  
+   naoqiSocket.removeListener('reply', onReply);
+   naoqiSocket.removeListener('error', onError);
+   reject(new Error("NAOqi call timeout: " + obj + "." + method));
+  }, 30000);
+
   function onReply(data) {
    if(data.idm === idm) {
     clearTimeout(timeout);
-    naoqiSocket.off('reply', onReply);
-    naoqiSocket.off('error', onError);
+    naoqiSocket.removeListener('reply', onReply);
+    naoqiSocket.removeListener('error', onError);
+    trace("NAOqi reply for " + obj + "." + method, false);
     resolve(data.result);
    }
   }
-  
+
   function onError(data) {
-   if(data.idm === idm) {
+   if(data && data.idm === idm) {
     clearTimeout(timeout);
-    naoqiSocket.off('reply', onReply);
-    naoqiSocket.off('error', onError);
-    reject(new Error(data.result.error || "NAOqi error"));
+    naoqiSocket.removeListener('reply', onReply);
+    naoqiSocket.removeListener('error', onError);
+    trace("NAOqi error: " + obj + "." + method + ": " + JSON.stringify(data.result), true);
+    reject(new Error(data.result.error || data.result || "NAOqi error"));
    }
   }
-  
+
   naoqiSocket.on('reply', onReply);
   naoqiSocket.on('error', onError);
  });
@@ -222,47 +229,51 @@ function naoqiCall(service, method, args) {
 function connectNaoqi() {
  return new Promise(function(resolve, reject) {
   let host = SYS.NAOQIBRIDGE || "127.0.0.1";
-  let port = SYS.NAOQIBRIDGEPORT || 8002;
-  
-  trace("Connecting to NAOqi bridge at " + host + ":" + port, false);
-  
-  naoqiSocket = IO.connect("http://" + host + ":" + port, {
+  let port = SYS.NAOQIBRIDGEPORT || 80;
+  let path = SYS.NAOQIPATH || "libs/qimessaging/1.0/socket.io";
+
+  trace("Connecting to NAOqi bridge at http://" + host + ":" + port + " with resource " + path, true);
+
+  naoqiSocket = IO_LEGACY.connect("http://" + host + ":" + port, {
    "connect timeout": 5000,
-   transports: ["websocket"],
-   path: "/libs/qimessaging/2/socket.io"
+   transports: ["xhr-polling", "websocket"],
+   resource: path
   });
-  
+
   naoqiSocket.on("connect", function() {
    trace("Connected to NAOqi bridge", true);
-   
+
+   // ServiceDirectory.service returns {pyobject: N, metaobject: {...}}
+   // Subsequent calls use the pyobject ID as obj
    naoqiCall("ServiceDirectory", "service", ["ALMotion"]).then(function(result) {
-    motionProxy = result;
-    trace("ALMotion service connected", true);
-    return naoqiCall("ALMotion", "wakeUp", []);
+    motionProxy = result.pyobject;
+    trace("ALMotion service acquired (pyobject=" + motionProxy + ")", true);
+    return naoqiCall(motionProxy, "wakeUp", []).catch(function(err) {
+     trace("wakeUp warning (non-fatal): " + err.message, true);
+    });
    }).then(function() {
     trace("Robot woken up", true);
     return naoqiCall("ServiceDirectory", "service", ["ALBattery"]);
    }).then(function(result) {
-    batteryProxy = result;
-    trace("ALBattery service connected", true);
+    batteryProxy = result.pyobject;
+    trace("ALBattery service acquired (pyobject=" + batteryProxy + ")", true);
     return naoqiCall("ServiceDirectory", "service", ["ALTextToSpeech"]);
    }).then(function(result) {
-    ttsProxy = result;
-    trace("ALTextToSpeech service connected", true);
+    ttsProxy = result.pyobject;
+    trace("ALTextToSpeech service acquired (pyobject=" + ttsProxy + ")", true);
     initNaoqi = true;
     setInit();
     resolve();
    }).catch(function(err) {
-    trace("NAOqi init error: " + err.message, true);
+    trace("NAOqi init error: " + (err ? err.message : 'undefined') + " | stack: " + (err && err.stack), true);
     reject(err);
    });
   });
-  
+
   naoqiSocket.on("error", function(err) {
-   trace("NAOqi bridge connection error: " + err.message, true);
-   reject(err);
+   trace("NAOqi bridge socket error: " + (err ? JSON.stringify(err) : 'undefined err'), true);
   });
-  
+
   naoqiSocket.on("disconnect", function() {
    trace("NAOqi bridge disconnected", true);
    initNaoqi = false;
@@ -289,7 +300,7 @@ function applyMotorCommands() {
  }
  
  if(jointNames.length > 0) {
-  naoqiCall("ALMotion", "setAngles", [jointNames, jointAngles, speed]).catch(function(err) {
+  naoqiCall(motionProxy, "setAngles", [jointNames, jointAngles, speed]).catch(function(err) {
    trace("Motor command error: " + err.message, false);
   });
  }
@@ -299,7 +310,7 @@ function speak(text) {
  if(!ttsProxy || !initDone)
   return;
  
- naoqiCall("ALTextToSpeech", "say", [text]).catch(function(err) {
+ naoqiCall(ttsProxy, "say", [text]).catch(function(err) {
   trace("TTS error: " + err.message, false);
  });
 }
@@ -369,7 +380,7 @@ function sleep() {
  });
 
  if(motionProxy) {
-  naoqiCall("ALMotion", "rest", []).catch(function() {});
+  naoqiCall(motionProxy, "rest", []).catch(function() {});
  }
 
  currentServer = "";
@@ -437,16 +448,17 @@ USER.SERVERS.forEach(function(server, index) {
 
  sockets[server].on("connect", function() {
   trace("Connected to " + server + "/" + SYS.SECUREMOTEPORT, true);
-  EXEC("hostname -I").stdout.on("data", function(ipPriv) {
-   EXEC("iwgetid -r || echo $?").stdout.on("data", function(ssid) {
+  EXEC("hostname -I 2>/dev/null || echo unknown", function(err, ipPriv) {
+   EXEC("iwgetid -r 2>/dev/null || echo unknown", function(err2, ssid) {
     sockets[server].emit("serveurrobotlogin", {
      conf: USER,
      version: VERSION,
      processTime: PROCESSTIME,
      osTime: OSTIME,
-     ipPriv: ipPriv.trim(),
-     ssid: ssid.trim()
+     ipPriv: (ipPriv || "").trim(),
+     ssid: (ssid || "").trim()
     });
+    trace("Login sent to " + server, true);
    });
   });
  });
@@ -516,6 +528,7 @@ USER.SERVERS.forEach(function(server, index) {
  });
 
  sockets[server].on("connect_error", function(err) {
+  trace("Connection error to " + server + ": " + (err ? JSON.stringify(err) : 'unknown'), true);
  });
 
  sockets[server].on("clientsrobottts", function(data) {
@@ -830,11 +843,8 @@ setInterval(function() {
  if(!initDone || !batteryProxy)
   return;
 
- naoqiCall("ALBattery", "getBatteryCharge", []).then(function(bat) {
+ naoqiCall(batteryProxy, "getBatteryCharge", []).then(function(bat) {
   battery = bat;
-  return naoqiCall("ALBattery", "getBatteryVoltage", []);
- }).then(function(volts) {
-  voltage = volts / 1000;
  }).catch(function() {});
 }, SYS.GAUGERATE);
 

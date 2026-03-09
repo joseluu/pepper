@@ -1,8 +1,8 @@
 {
-  "LOGIN": "Demo",
-  "PASSWORD": "Default",
+  "NAME": "YourRobotName",
+  "PASSWORD": "YourPassword",
   "SERVERS": [
-    "www.vigibot.com"
+    "https://www.vigibot.com"
   ],
   "CMDDIFFUSION": [
     [
