@@ -1,0 +1,41 @@
+# Dockerfile for building _qi.so Python 3 module for NAOqi 2.7
+#
+# Usage:
+#   docker build -f Dockerfile.qi_py3 -t qi_py3_builder .
+#   docker run -v $(pwd):/build qi_py3_builder
+#
+# The built _qi.so will be in build_env/
+
+FROM i386/debian:stretch
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    g++ \
+    python3.5-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Build command
+CMD ["bash", "-c", "\
+    echo 'Building _qi.so for Python 3.5 (32-bit)...' && \
+    g++ -shared -fPIC \
+        -I build_env/Python-3.5.10/Include \
+        -I build_env/boost_1_59_0 \
+        -I opn_work/mnt/opt/aldebaran/include \
+        -I /usr/include/python3.5m \
+        -std=c++11 \
+        -w \
+        -c _qi_py3.cpp -o build_env/_qi_32.o && \
+    echo 'Compilation successful!' && \
+    g++ -shared -fPIC \
+        build_env/_qi_32.o \
+        -L opn_work/mnt/opt/aldebaran/lib -lqipython3 \
+        -L opn_work/mnt/usr/lib -lboost_python3 \
+        -Wl,-rpath,/opt/aldebaran/lib \
+        -Wl,-rpath,/usr/lib \
+        -o build_env/_qi.so && \
+    echo 'Build successful!' && \
+    file build_env/_qi.so \
+"]
