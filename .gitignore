@@ -1,0 +1,17 @@
+# Build artifacts and large binaries
+qipy_with_bridge/build/
+qipy_with_bridge/python35_pepper_deploy.tar.gz
+
+# Claude Code local settings
+.claude/
+
+# Node.js
+node_modules/
+/tmp/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
