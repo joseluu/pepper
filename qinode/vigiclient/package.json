@@ -1,0 +1,19 @@
+{
+  "name": "vigiclient-pepper",
+  "version": "1.0.0",
+  "description": "Pepper robot client for Vigibot.com",
+  "main": "clientrobotpi.js",
+  "dependencies": {
+    "socket.io-client": "^2.3.0",
+    "stream-split": "^1.1.0"
+  },
+  "scripts": {
+    "start": "node clientrobotpi.js"
+  },
+  "author": "Vigibot",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vigibot/vigiclient/issues"
+  },
+  "homepage": "https://www.vigibot.com"
+}
