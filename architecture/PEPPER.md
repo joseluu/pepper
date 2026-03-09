@@ -6,7 +6,8 @@ This document describes the internal software architecture of the Pepper robot (
 
 **Color convention in diagrams:**
 - Default / neutral colors = existing base architecture (shipped with the robot)
-- <span style="color:#22aa22">**Green**</span> = planned additions (qipy, qinode, vigiclient, Broadway.js streaming)
+- <span style="color:#22aa22">**Green**</span> = planned additions (qipy, qinode, Broadway.js streaming)
+- <span style="color:#4444cc">**Blue**</span> = done additions (vigiclient-pepper)
 
 ---
 
@@ -95,9 +96,9 @@ flowchart TB
       QIPY_LIB["qipy library\nDirect TCP to port 9559\nNo C extensions, no bridge"]:::planned
     end
 
-    subgraph VIGICLIENT["vigiclient-pepper (PLANNED)"]
-      NODE10["Node.js 10\n(/data/node10/)"]:::planned
-      VIGICLI["vigiclient (modified)\nsocket.io-client 2.3\nstream-split NAL"]:::planned
+    subgraph VIGICLIENT["vigiclient-pepper (DONE)"]
+      NODE10["Node.js 10\n(/data/node10/)"]:::done
+      VIGICLI["vigiclient (modified)\nsocket.io-client 2.3 → vigibot.com\nsocket.io-client 0.9.16 → NAOqi bridge\nstream-split NAL"]:::done
     end
 
     subgraph H264STREAM["H.264 Video Streaming (PLANNED)"]
@@ -123,7 +124,7 @@ flowchart TB
 
     %% Planned connections
     QIPY_LIB -->|"TCP 9559\nbinary QiMessaging"| NAOQI_BIN
-    VIGICLI -->|"Socket.IO 0.9\nNAOqi calls"| QIMSG_JSON
+    VIGICLI -->|"Socket.IO 0.9.16\nNAOqi calls\n(socket.io-client-legacy)"| QIMSG_JSON
     WS_SERVER -->|"stdin pipe\nH.264 Annex B"| FFMPEG
     FFMPEG -->|"V4L2 capture"| V4L2
   end
@@ -149,9 +150,10 @@ flowchart TB
   %% External connections (planned)
   QINODE_LIB -->|"Socket.IO 0.9\nport 80"| NGINX
   BROADWAY -->|"WebSocket port 8080\nbinary NAL units"| WS_SERVER
-  VIGICLI -->|"Socket.IO 2.3\nNAL video + telemetry"| VIGIBOT_SRV
+  VIGICLI -->|"Socket.IO 2.3.0\nNAL video + telemetry"| VIGIBOT_SRV
 
   classDef planned fill:#e8ffe8,stroke:#22aa22,color:#227722
+  classDef done fill:#e8e8ff,stroke:#4444cc,color:#333399
 ```
 
 ---
@@ -203,7 +205,7 @@ flowchart TB
     subgraph PLANNED_ONROBOT["Planned On-Robot Components"]
       direction TB
       QIPY["qipy\nPure Python 3\nbinary protocol"]:::planned
-      NODE10["Node.js 10\nvigiclient-pepper"]:::planned
+      NODE10["Node.js 10\nvigiclient-pepper\nsocket.io 2.3 + 0.9.16"]:::done
       WS_H264["Tornado WS server\nport 8080\nH.264 NAL splitter"]:::planned
       FFMPEG["ffmpeg\nH.264 baseline\nAnnex B"]:::planned
       V4L2["V4L2 camera"]
@@ -239,6 +241,7 @@ flowchart TB
   NODE10 -->|"Socket.IO 2.3\nNAL + telemetry"| VIGIBOT
 
   classDef planned fill:#e8ffe8,stroke:#22aa22,color:#227722
+  classDef done fill:#e8e8ff,stroke:#4444cc,color:#333399
 ```
 
 ---
@@ -467,20 +470,22 @@ graph TB
 │       └── python3.5/site-packages/
 │           └── qi_bridge_client.py    # Python 3 client module
 │
-├── node10/                             # PLANNED (vigiclient)
-│   ├── bin/
-│   │   ├── node                       # Node.js 10.24.1
-│   │   └── npm
-│   └── lib/node_modules/
+├── node10/                             # DEPLOYED (vigiclient)
+│   └── bin/
+│       └── node                       # Node.js 10.24.1
 │
-└── vigiclient-pepper/                  # PLANNED
+└── vigiclient/                         # DEPLOYED
     ├── clientrobotpi.js               # Modified vigiclient
+    ├── trame.js                       # Telemetry frame handling
+    ├── sys.json                       # System config (ports, bridge, rates)
+    ├── package.json                   # Dependencies
     └── node_modules/
-        ├── socket.io-client/          # 2.3.x
+        ├── socket.io-client/          # 2.3.0 (vigibot.com connection)
+        ├── socket.io-client-legacy/   # 0.9.16 (NAOqi bridge connection)
         └── stream-split/             # NAL splitter
 ```
 
-<span style="color:#22aa22">Green items above are planned additions — everything else is already deployed.</span>
+<span style="color:#22aa22">Green items are planned.</span> Node.js 10 and vigiclient are **deployed and running** on the robot.
 
 ---
 
@@ -499,7 +504,10 @@ flowchart LR
     QIPY["<b>qipy</b>\nPure Python 3 QiMessaging\nRuns ON robot\nDirect TCP to 9559\nNo bridge, no Python 2"]:::planned
     QINODE["<b>qinode</b>\nNode.js NAOqi client\nRuns on PC\nsocket.io-client 0.9.16\nPromise-based API"]:::planned
     BROADWAY["<b>H.264 Broadway.js</b>\nffmpeg → NAL → WebSocket\nTornado server port 8080\nBrowser: canvas decoder\n~55ms with VA-API"]:::planned
-    VIGICLIENT["<b>vigiclient-pepper</b>\nNode.js 10 on robot\nVideo to vigibot.com\nNAL-over-Socket.IO\nMotor via NAOqi bridge"]:::planned
+  end
+
+  subgraph DONE_ADDITIONS["Done"]
+    VIGICLIENT["<b>vigiclient-pepper</b>\nNode.js 10 on robot\nsocket.io 2.3 → vigibot.com\nsocket.io 0.9.16 → NAOqi bridge"]:::done
   end
 
   PYBRIDGE -->|"qi.Session()"| NAOQI
@@ -507,11 +515,12 @@ flowchart LR
 
   QIPY -->|"binary protocol"| NAOQI
   QINODE -->|"Socket.IO 0.9"| BRIDGE
-  VIGICLIENT -->|"Socket.IO 0.9\n(NAOqi calls)"| BRIDGE
+  VIGICLIENT -->|"Socket.IO 0.9.16\n(NAOqi calls)"| BRIDGE
   BROADWAY -->|"ffmpeg V4L2"| CAMERAS
   VIGICLIENT -->|"ffmpeg V4L2"| CAMERAS
 
   classDef planned fill:#e8ffe8,stroke:#22aa22,color:#227722
+  classDef done fill:#e8e8ff,stroke:#4444cc,color:#333399
 ```
 
 ### Dependency matrix
@@ -525,4 +534,4 @@ flowchart LR
 | **qipy** | Robot | NAOqi | TCP 9559 binary (pure Python 3) | 🟢 Planned |
 | **qinode** | PC | nginx → qimessaging-json | Socket.IO 0.9 (JSON) | 🟢 Planned |
 | **Broadway.js stream** | Robot + Browser | V4L2 → ffmpeg → WS → browser | H.264 NAL over WebSocket | 🟢 Planned |
-| **vigiclient-pepper** | Robot | V4L2 + qimessaging-json + vigibot.com | H.264 NAL + telemetry over Socket.IO 2.3 | 🟢 Planned |
+| **vigiclient-pepper** | Robot | V4L2 + qimessaging-json + vigibot.com | Socket.IO 2.3 (vigibot) + 0.9.16 (NAOqi) | ✅ Done |

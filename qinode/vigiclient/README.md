@@ -8,122 +8,156 @@ This is an adapted version of [vigiclient](https://github.com/vigibot/vigiclient
 
 ### What it does
 
-- Connects to vigibot.com via Socket.IO
-- Streams H.264 video from Pepper's top camera
+- Connects to vigibot.com via Socket.IO 2.3.0
+- Connects to the on-robot NAOqi bridge via Socket.IO 0.9.16 (legacy protocol)
+- Streams H.264 video from Pepper's top camera via ffmpeg
 - Sends telemetry (battery, CPU temp, WiFi signal) to the server
 - Receives motor commands and applies them via NAOqi ALMotion
 - Supports text-to-speech via NAOqi ALTextToSpeech
 
+### Dual Socket.IO Architecture
+
+The client uses two different Socket.IO versions simultaneously:
+
+| Connection | Library | Version | Protocol |
+|-----------|---------|---------|----------|
+| vigibot.com | `socket.io-client` | 2.3.0 | Socket.IO 2.x (modern) |
+| NAOqi bridge | `socket.io-client-legacy` | 0.9.16 | Socket.IO 0.9 (legacy) |
+
+The NAOqi bridge (`qimessaging-json`) on the robot speaks Socket.IO 0.9.11 (Tornado/tornadio2), requiring the legacy client. The vigibot.com server uses Socket.IO 2.x.
+
 ### Prerequisites
 
-- Pepper robot running NAOqiOS
-- Node.js 10+ installed on the robot (at `/data/node10/` or similar)
-- Robot connected to WiFi
-- vigibot.com account
+- Pepper robot running NAOqiOS 2.7.x
+- Node.js 10 installed on the robot at `/data/node10/`
+- Robot connected to WiFi with internet access
+- vigibot.com account with a robot configured
 
 ## Installation
 
-### 1. Install Node.js on Pepper (if not already installed)
+### 1. Deploy Node.js 10
 
-See [qinode/PLAN.md](../PLAN.md) for building Node.js 10 for the i686 Pepper.
+Use the `node10_pepper.tar.gz` release package:
 
-### 2. Transfer and install vigiclient
-
-**Option A: With dependencies included (recommended - no npm needed)**
 ```bash
-scp qinode/releases/vigiclient_pepper_with_deps.tar.gz pepper:/data/
-ssh pepper "cd /data && tar xzf vigiclient_pepper_with_deps.tar.gz"
+scp node10_pepper.tar.gz nao@<robot-ip>:/data/
+ssh nao@<robot-ip> "cd /data && tar xzf node10_pepper.tar.gz && rm node10_pepper.tar.gz"
 ```
 
-**Option B: Without dependencies (requires npm on robot)**
+Verify: `ssh nao@<robot-ip> "/data/node10/bin/node --version"` should show `v10.24.1`.
+
+### 2. Deploy vigiclient
+
+Use the `vigiclient_pepper_with_deps.tar.gz` release package (includes node_modules):
+
 ```bash
-scp qinode/releases/vigiclient_pepper.tar.gz pepper:/data/
-ssh pepper "cd /data && tar xzf vigiclient_pepper.tar.gz && cd vigiclient && /data/node10/bin/npm install --production"
+scp vigiclient_pepper_with_deps.tar.gz nao@<robot-ip>:/data/
+ssh nao@<robot-ip> "cd /data && tar xzf vigiclient_pepper_with_deps.tar.gz && rm vigiclient_pepper_with_deps.tar.gz"
 ```
 
-### 3. Configure robot.json
+This creates `/data/vigiclient/` with all dependencies included.
 
-Edit `/data/vigiclient/robot.json` with your vigibot.com credentials:
+### 3. Configure credentials
+
+Copy the example and edit with your vigibot.com credentials:
+
+```bash
+ssh nao@<robot-ip>
+cp /data/vigiclient/robot.json.example /home/nao/robot.json
+```
+
+Edit `/home/nao/robot.json`:
 
 ```json
 {
-  "LOGIN": "your_username",
-  "PASSWORD": "your_password",
-  "SERVERS": ["www.vigibot.com"]
+  "NAME": "your_robot_name",
+  "PASSWORD": "your_password"
 }
 ```
+
+The `SERVERS`, `CMDDIFFUSION`, `CMDDIFFAUDIO`, and `CMDTTS` fields in `robot.json` override the defaults in `sys.json`. If omitted, the defaults from `sys.json` are used.
 
 ### 4. Start the client
 
 ```bash
-cd /data/vigiclient
-node /data/node10/bin/node clientrobotpi.js
-```
-
-Or with the Node.js path in PATH:
-
-```bash
-export PATH=/data/node10/bin:$PATH
+ssh nao@<robot-ip>
+PATH=/data/node10/bin:$PATH
 cd /data/vigiclient
 node clientrobotpi.js
 ```
 
+To run in background:
+
+```bash
+ssh nao@<robot-ip> "cd /data/vigiclient && PATH=/data/node10/bin:\$PATH nohup node clientrobotpi.js > /dev/null 2>&1 &"
+```
+
+### 5. Check the log
+
+```bash
+ssh nao@<robot-ip> "cat /home/nao/vigiclient.log"
+```
+
+A successful startup looks like:
+
+```
+Pepper client start
+Client ready
+Connecting to NAOqi bridge at http://127.0.0.1:80 with resource libs/qimessaging/1.0/socket.io
+Connected to NAOqi bridge
+Connected to https://www.vigibot.com/8042
+Login sent to https://www.vigibot.com
+Receiving robot configuration data from the https://www.vigibot.com server
+ALMotion service acquired (pyobject=0)
+Robot woken up
+ALBattery service acquired (pyobject=1)
+ALTextToSpeech service acquired (pyobject=2)
+NAOqi connected successfully
+```
+
 ## Configuration
 
-### robot.json
+### robot.json (user credentials — on robot at /home/nao/robot.json)
 
 | Field | Description |
 |-------|-------------|
-| LOGIN | Your vigibot.com username |
+| NAME | Your vigibot.com robot name |
 | PASSWORD | Your vigibot.com password |
-| SERVERS | Array of vigibot server URLs |
+| SERVERS | (optional) Override server URLs |
+| CMDDIFFUSION | (optional) Override ffmpeg video command |
 
-### sys.json
+### sys.json (system config — at /data/vigiclient/sys.json)
 
-System configuration (usually doesn't need changes):
-
-| Field | Description |
-|-------|-------------|
-| NAOQIBRIDGE | NAOqi bridge IP (default: 127.0.0.1) |
-| NAOQIBRIDGEPORT | NAOqi bridge port (default: 8002) |
-| VIDEOLOCALPORT | Local port for H.264 stream |
-| CMDDIFFUSION | ffmpeg command for video capture |
-
-## Motor Control Mapping
-
-The client maps vigibot servo channels to Pepper joint angles. Configure this in the vigibot web interface:
-
-| Vigibot Channel | Pepper Joint | Description |
-|-----------------|--------------|-------------|
-| 0 | HeadYaw | Head rotation (left-right) |
-| 1 | HeadPitch | Head tilt (up-down) |
-| 2 | LShoulderPitch | Left arm shoulder |
-| 3 | RShoulderPitch | Right arm shoulder |
-| ... | ... | Additional joints |
+| Field | Default | Description |
+|-------|---------|-------------|
+| SECUREMOTEPORT | 8042 | Vigibot.com Socket.IO port |
+| NAOQIBRIDGE | 127.0.0.1 | NAOqi bridge host |
+| NAOQIBRIDGEPORT | 80 | NAOqi bridge port (nginx) |
+| NAOQIPATH | libs/qimessaging/1.0/socket.io | Socket.IO resource path |
+| VIDEOLOCALPORT | 9998 | Local TCP port for H.264 stream |
+| LOGFILE | /home/nao/vigiclient.log | Log file path |
 
 ## Architecture
 
 ```
                      vigibot.com
-                         ▲
-                         │ Socket.IO 2.3
-                         │
-               ┌─────────┴──────────┐
-               │  vigiclient-pepper │
-               │  (Node.js)         │
-               └─────────┬──────────┘
-                         │
-          NAL stream     │  motor commands
-          (TCP pipe)     │
-                         ▼
-                    NAOqi bridge
-                    (Socket.IO → port 8002)
-                         │
-                         ▼
-                    ALMotion / ALTextToSpeech
-                         │
-                         ▼
+                         ^
+                         | Socket.IO 2.3.0
+                         |
+               +--------------------+
+               |  vigiclient-pepper |
+               |  (Node.js 10)      |
+               +--------+-----------+
+                         |
+          NAL stream     |  Socket.IO 0.9.16
+          (TCP pipe)     |
+                         v
+            nginx (port 80) -> qimessaging-json (port 8002)
+                         |
+                         v
                     NAOqi (port 9559)
+                         |
+                    ALMotion / ALBattery / ALTextToSpeech
 ```
 
 ## Files
@@ -133,32 +167,38 @@ The client maps vigibot servo channels to Pepper joint angles. Configure this in
 | clientrobotpi.js | Main application |
 | trame.js | Telemetry frame handling |
 | sys.json | System configuration |
-| robot.json | Robot credentials (user-specific) |
+| robot.json.example | Template for robot credentials |
 | package.json | Node.js dependencies |
 
 ## Troubleshooting
 
 ### Client won't start
 
-- Check that Node.js is installed: `node --version`
-- Verify robot.json exists and has valid JSON
-- Check the log file: `/data/vigiclient/vigiclient.log`
+- Check that Node.js is installed: `/data/node10/bin/node --version`
+- Verify `/home/nao/robot.json` exists and has valid JSON
+- Check the log file: `cat /home/nao/vigiclient.log`
+
+### Not visible on vigibot.com
+
+- Check that the robot has internet access: `ping -c 1 www.vigibot.com`
+- Verify credentials in `/home/nao/robot.json` match your vigibot.com account
+- Check the log for "Connected to https://www.vigibot.com/8042" and "Login sent"
+
+### wakeUp timeout
+
+- wakeUp can take 15-30 seconds when the robot was in rest mode — this is normal
+- The timeout is set to 30 seconds; if it fails, the init continues but motor commands won't work
+
+### Can't connect to NAOqi
+
+- The qimessaging-json bridge starts automatically with NAOqiOS
+- Verify it's running: `curl -s http://127.0.0.1:80/libs/qimessaging/1.0/socket.io/1/`
+- The bridge must be accessed through nginx (port 80), not directly (port 8002)
 
 ### No video stream
 
 - Verify ffmpeg is installed: `which ffmpeg`
 - Check camera device: `ls -la /dev/video-*`
-- Try a different resolution in the vigibot configuration
-
-### Can't connect to NAOqi
-
-- Verify the qimessaging-json service is running on the robot
-- Check the NAOqi bridge port (default 8002)
-
-### Motor commands not working
-
-- The robot must be "woken up" first - this happens automatically
-- Check that ALMotion service is available
 
 ## Dependencies Removed (vs original vigiclient)
 

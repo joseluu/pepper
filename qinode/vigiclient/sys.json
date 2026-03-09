@@ -1,6 +1,6 @@
 {
-  "SECUREMOTEPORT": "443",
-  "LOGFILE": "/data/vigiclient/vigiclient.log",
+  "SECUREMOTEPORT": 8042,
+  "LOGFILE": "/home/nao/vigiclient.log",
   "VIDEOLOCALPORT": 9998,
   "AUDIOLOCALPORT": 9999,
   "V4L2": "/usr/bin/v4l2-ctl",
@@ -41,9 +41,10 @@
     230400
   ],
   "NAOQIBRIDGE": "127.0.0.1",
-  "NAOQIBRIDGEPORT": 8002,
+  "NAOQIBRIDGEPORT": 80,
+  "NAOQIPATH": "libs/qimessaging/1.0/socket.io",
   "SERVERS": [
-    "www.vigibot.com"
+    "https://www.vigibot.com"
   ],
   "CMDDIFFUSION": [
     [

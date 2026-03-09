@@ -7,6 +7,9 @@ qipy_with_bridge/python35_pepper_deploy.tar.gz
 
 # Node.js
 node_modules/
+
+# Robot credentials (contains login/password)
+robot.json
 /tmp/
 
 # Python
