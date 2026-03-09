@@ -29,23 +29,19 @@ See [qinode/PLAN.md](../PLAN.md) for building Node.js 10 for the i686 Pepper.
 
 ### 2. Transfer and install vigiclient
 
+**Option A: With dependencies included (recommended - no npm needed)**
 ```bash
-# From your development machine
-scp -r qinode/vigiclient nao@pepper:/data/
-
-# Or using the alias from CLAUDE.md
-scp -r qinode/vigiclient nao@192.168.11.183:/data/
+scp qinode/releases/vigiclient_pepper_with_deps.tar.gz pepper:/data/
+ssh pepper "cd /data && tar xzf vigiclient_pepper_with_deps.tar.gz"
 ```
 
-### 3. Install dependencies on the robot
-
+**Option B: Without dependencies (requires npm on robot)**
 ```bash
-ssh pepper
-cd /data/vigiclient
-npm install --production
+scp qinode/releases/vigiclient_pepper.tar.gz pepper:/data/
+ssh pepper "cd /data && tar xzf vigiclient_pepper.tar.gz && cd vigiclient && /data/node10/bin/npm install --production"
 ```
 
-### 4. Configure robot.json
+### 3. Configure robot.json
 
 Edit `/data/vigiclient/robot.json` with your vigibot.com credentials:
 
@@ -57,7 +53,7 @@ Edit `/data/vigiclient/robot.json` with your vigibot.com credentials:
 }
 ```
 
-### 5. Start the client
+### 4. Start the client
 
 ```bash
 cd /data/vigiclient
