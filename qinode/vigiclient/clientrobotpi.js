@@ -1,6 +1,7 @@
 "use strict";
 
-const VERSION = "vigibot 2.0";
+const FS = require("fs");
+const VERSION = Math.trunc(FS.statSync(__filename).mtimeMs);
 
 const USER = require("/home/nao/robot.json");
 const SYS = require("./sys.json");
@@ -8,7 +9,6 @@ const SYS = require("./sys.json");
 const FRAME = require("./trame.js");
 
 const OS = require("os");
-const FS = require("fs");
 const IO = require("socket.io-client");
 const IO_LEGACY = require("socket.io-client-legacy");
 const EXEC = require("child_process").exec;
@@ -244,15 +244,17 @@ function connectNaoqi() {
    trace("Connected to NAOqi bridge", true);
 
    // ServiceDirectory.service returns {pyobject: N, metaobject: {...}}
-   // Subsequent calls use the pyobject ID as obj
+   // Acquire service proxies, release cameras, then mark ready
+   // wakeUp runs in background (can take 15-30s)
    naoqiCall("ServiceDirectory", "service", ["ALMotion"]).then(function(result) {
     motionProxy = result.pyobject;
     trace("ALMotion service acquired (pyobject=" + motionProxy + ")", true);
-    return naoqiCall(motionProxy, "wakeUp", []).catch(function(err) {
+    // Start wakeUp in background — don't wait for it
+    naoqiCall(motionProxy, "wakeUp", []).then(function() {
+     trace("Robot woken up", true);
+    }).catch(function(err) {
      trace("wakeUp warning (non-fatal): " + err.message, true);
     });
-   }).then(function() {
-    trace("Robot woken up", true);
     return naoqiCall("ServiceDirectory", "service", ["ALBattery"]);
    }).then(function(result) {
     batteryProxy = result.pyobject;
@@ -261,6 +263,31 @@ function connectNaoqi() {
    }).then(function(result) {
     ttsProxy = result.pyobject;
     trace("ALTextToSpeech service acquired (pyobject=" + ttsProxy + ")", true);
+    // Release cameras for ffmpeg before marking ready
+    return naoqiCall("ServiceDirectory", "service", ["ALAutonomousLife"]);
+   }).then(function(result) {
+    var lifeProxy = result.pyobject;
+    return naoqiCall(lifeProxy, "setState", ["disabled"]).catch(function(err) {
+     trace("ALAutonomousLife disable warning: " + err.message, true);
+    });
+   }).then(function() {
+    return naoqiCall("ServiceDirectory", "service", ["ALVideoDevice"]);
+   }).then(function(result) {
+    var videoProxy = result.pyobject;
+    return naoqiCall(videoProxy, "getSubscribers", []).then(function(subs) {
+     if(subs.length > 0) {
+      trace("Releasing " + subs.length + " camera subscribers", true);
+      var chain = Promise.resolve();
+      subs.forEach(function(sub) {
+       chain = chain.then(function() {
+        return naoqiCall(videoProxy, "unsubscribe", [sub]).catch(function() {});
+       });
+      });
+      return chain;
+     }
+    });
+   }).then(function() {
+    trace("Cameras released for ffmpeg", true);
     initNaoqi = true;
     setInit();
     resolve();
@@ -329,7 +356,7 @@ function wake(server) {
   return;
  }
 
- trace("Robot wake", false);
+ trace("Robot wake", true);
 
  if(hard.SNAPSHOTSINTERVAL) {
   sigterm("ffmpeg", "ffmpeg.*video", function(code) {
@@ -394,6 +421,10 @@ function configurationVideo(callback) {
                                                            ).replace(new RegExp("BITRATE", "g"), confVideo.BITRATE
                                                            ).replace(new RegExp("ROTATE", "g"), confVideo.ROTATE
                                                            ).replace(new RegExp("VIDEOLOCALPORT", "g"), SYS.VIDEOLOCALPORT);
+ // Pepper cameras output YUYV 4:2:2 — force conversion for x264 baseline
+ if(cmdDiffusion.indexOf("-pix_fmt") === -1 && cmdDiffusion.indexOf("libx264") !== -1) {
+  cmdDiffusion = cmdDiffusion.replace("-c:v libx264", "-pix_fmt yuv420p -c:v libx264");
+ }
  cmdDiffAudio = USER.CMDDIFFAUDIO.join("").replace(new RegExp("RECORDINGDEVICE", "g"), hard.RECORDINGDEVICE
                                          ).replace(new RegExp("AUDIOLOCALPORT", "g"), SYS.AUDIOLOCALPORT);
 
@@ -403,7 +434,7 @@ function configurationVideo(callback) {
 }
 
 function diffusion() {
- trace("Starting the H.264 video broadcast stream", false);
+ trace("Starting the H.264 video broadcast stream", true);
  exec("Diffusion", cmdDiffusion, function() {
   trace("Stopping the H.264 video broadcast stream", false);
  });
