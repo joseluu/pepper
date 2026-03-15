@@ -5,16 +5,19 @@ Both robots are the same model, same OS (NAOqiOS 3.3.10.1, NAOqi 2.7.1.128).
 ## SSH Access
 
 SSH key auth is configured — no password needed for normal use.
+Use `ssh memmer`, `ssh pepper`, `ssh vigibot` directly (aliases configured in ~/.ssh/config).
 
 | Robot     | SSH alias        | WiFi IP          | Ethernet IP      |
 |-----------|------------------|------------------|------------------|
 | pepper    | `ssh pepper`     | 192.168.11.182   | 192.168.11.183   |
 | memmer    | `ssh memmer`   | 192.168.11.185   | 192.168.11.190   |
+| vigibot   | `ssh vigibot`    | —                | —                |
 
 - User: `nao` — key: `~/.ssh/nao`
 - Wired aliases: `ssh pepper_wired`, `ssh memmer_wired`
 - `sudo` available, unrestricted
 - Root SSH blocked (`PermitRootLogin no`), `su` blocked (root shell is `/sbin/nologin`)
+- `vigibot` is a reference vigibot robot (Raspberry Pi) that connects properly to vigibot.com
 
 ### Non-interactive SSH (for scripts without key agent)
 

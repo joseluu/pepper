@@ -309,27 +309,26 @@ function connectNaoqi() {
  });
 }
 
+// Map COMMANDS16 to Pepper head joints
+// [0] Turret X (degrees) → HeadYaw (radians), [1] Turret Y (degrees) → HeadPitch (radians)
+var PEPPER_JOINTS = [
+ {name: "HeadYaw",   index: 0, scale: Math.PI / 180},
+ {name: "HeadPitch",  index: 1, scale: Math.PI / 180}
+];
+
 function applyMotorCommands() {
  if(!motionProxy || !initDone)
   return;
- 
- let jointNames = [];
- let jointAngles = [];
- let speed = 0.3;
- 
- for(let i = 0; i < conf.TX.COMMANDS16.length; i++) {
-  let jointName = hard.COMMANDS16[i].JOINT;
-  if(jointName) {
-   let angle = floatCommands16[i];
-   jointNames.push(jointName);
-   jointAngles.push(angle);
+
+ var speed = 0.3;
+
+ for(var i = 0; i < PEPPER_JOINTS.length; i++) {
+  var j = PEPPER_JOINTS[i];
+  if(j.index < conf.TX.COMMANDS16.length) {
+   naoqiCall(motionProxy, "setAngles", [j.name, floatCommands16[j.index] * j.scale, speed]).catch(function(err) {
+    trace("Motor command error: " + err.message, false);
+   });
   }
- }
- 
- if(jointNames.length > 0) {
-  naoqiCall(motionProxy, "setAngles", [jointNames, jointAngles, speed]).catch(function(err) {
-   trace("Motor command error: " + err.message, false);
-  });
  }
 }
 
@@ -357,6 +356,14 @@ function wake(server) {
  }
 
  trace("Robot wake", true);
+
+ if(motionProxy) {
+  naoqiCall(motionProxy, "wakeUp", []).then(function() {
+   trace("Robot woken up", true);
+  }).catch(function(err) {
+   trace("wakeUp warning: " + err.message, true);
+  });
+ }
 
  if(hard.SNAPSHOTSINTERVAL) {
   sigterm("ffmpeg", "ffmpeg.*video", function(code) {
@@ -405,10 +412,6 @@ function sleep() {
 
  sigterms(function() {
  });
-
- if(motionProxy) {
-  naoqiCall(motionProxy, "rest", []).catch(function() {});
- }
 
  currentServer = "";
  up = false;
@@ -916,6 +919,22 @@ setInterval(function() {
   });
  });
 }, SYS.BEACONRATE);
+
+// Keep head motors active (NAOqi idle timeout disables stiffness)
+setInterval(function() {
+ if(motionProxy !== null && motionProxy !== undefined && initNaoqi) {
+  trace("Keepalive: proxy=" + motionProxy, true);
+  naoqiCall(motionProxy, "setStiffnesses", ["HeadYaw", 1.0]).then(function(r) {
+   return naoqiCall(motionProxy, "getStiffnesses", ["HeadYaw"]);
+  }).then(function(r) {
+   trace("Keepalive stiffness=" + JSON.stringify(r), true);
+  }).catch(function(e) {
+   trace("Keepalive ERR: " + e.message, true);
+  });
+ } else {
+  trace("Keepalive skip: proxy=" + motionProxy + " initNaoqi=" + initNaoqi, true);
+ }
+}, 10000);
 
 NET.createServer(function(socket) {
  const SEPARATEURNALU = new Buffer.from([0, 0, 0, 1]);
