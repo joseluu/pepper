@@ -1,88 +1,102 @@
-# vigiclient.py - Vigibot client Python pour Pepper
+# vigiclient.py - Technical Reference
+
+## Why Python instead of Node.js
+
+The original Node.js vigiclient connected to NAOqi through the qimessaging-json bridge (Socket.IO 0.9 over nginx on port 80). This bridge had fatal limitations:
+
+1. **Arrays silently dropped**: `setAngles(['HeadYaw'], [0.5], 0.3)` — the bridge serialized array arguments incorrectly, causing NAOqi to receive no data
+2. **wakeUp non-persistent**: the robot would immediately go back to rest after `wakeUp()` via the bridge
+3. **Camera device locked**: naoqi-service holds `/dev/video-top` and `/dev/video-bottom` exclusively via V4L2. Direct ffmpeg access to `/dev/video-*` fails with "Device or resource busy"
+4. **No workaround**: these are bridge-level bugs, not fixable from the client side
+
+The Python rewrite connects directly to NAOqi via `qi.Session('tcp://127.0.0.1:9559')`, bypassing the bridge entirely. Video uses `ALVideoDevice.getImageRemote()` to grab frames from the camera API and pipe raw YUYV422 to ffmpeg stdin.
 
 ## Architecture
 
-Client Python 2.7 se connectant directement au SDK NAOqi via `qi.Session()`, sans passer par le bridge qimessaging-json (qui avait des limitations fatales : arrays silencieusement ignores, wakeUp non persistant).
+### Components
 
-### Composants
+1. **Socket.IO 2.x / Engine.IO 3** — Manual implementation on `websocket-client` 0.59.0
+   - Handshake EIO=3 via WebSocket (no polling fallback)
+   - Ping/pong keepalive
+   - JSON events and binary events (placeholders + attachments)
+   - `\x04` prefix on outgoing binary frames (EIO message type)
+   - `\x04` prefix stripped on incoming binary frames
 
-1. **Socket.IO 2.x / Engine.IO 3** - Implementation manuelle sur `websocket-client` 0.59.0
-   - Handshake EIO=3 via WebSocket direct (pas de polling)
-   - Gestion ping/pong, events JSON, events binaires (placeholders + attachments)
-   - Prefix `\x04` sur les frames binaires sortantes (EIO message type)
-   - Strip du prefix `\x04` sur les frames binaires entrantes
-
-2. **Protocole de trames binaires** (port de `trame.js`)
-   - `TxFrame` : trame de commande entrante (serveur -> robot)
-   - `RxFrame` : trame de reponse sortante (robot -> serveur)
-   - Layout : `[sync][cmd32][val32][cmd16][val16][cam][cmd8][cmd1][val8]`
+2. **Binary frame protocol** (ported from `trame.js`)
+   - `TxFrame`: command frames (server -> robot)
+   - `RxFrame`: response frames (robot -> server)
+   - Layout: `[sync][cmd32][val32][cmd16][val16][cam][cmd8][cmd1][val8]`
    - Little-endian, packed via `struct.pack_into` / `struct.unpack_from`
 
 3. **NAOqi direct** via `qi.Session('tcp://127.0.0.1:9559')`
-   - `ALMotion` : wakeUp, setAngles, setStiffnesses
-   - `ALBattery` : getBatteryCharge
-   - `ALTextToSpeech` : say
-   - `ALAutonomousLife` : disabled au demarrage
-   - `ALVideoDevice` : release des subscribers au demarrage
+   - `ALMotion`: wakeUp, setAngles, setStiffnesses, robotIsWakeUp
+   - `ALBattery`: getBatteryCharge
+   - `ALTextToSpeech`: say
+   - `ALRobotPosture`: goToPosture (for rest recovery)
+   - `ALVideoDevice`: subscribeCamera, getImageRemote (video frame grabbing)
+   - `ALAutonomousLife`: disabled at startup
+   - `ALBackgroundMovement`: enabled (prevents 30s idle rest)
+   - `ALAutonomousBlinking`: enabled (harmless eye LEDs)
 
-4. **Moteur de ramping** - port fidele du servo loop Node.js
-   - RAMPUP / RAMPDOWN / RAMPINIT par commande
-   - Failsafe sur alarme de latence (seuils LATENCYALARMBEGIN/END)
-   - Tick a SERVORATE (50ms)
+4. **Servo ramping engine** — faithful port of the Node.js servo loop
+   - RAMPUP / RAMPDOWN / RAMPINIT per command
+   - Failsafe on latency alarm (thresholds LATENCYALARMBEGIN/END)
+   - Tick at SERVORATE (50ms)
 
-### Mapping tete Pepper
+5. **Video pipeline** — ALVideoDevice -> ffmpeg -> TCP -> NALU splitter
+   - Frame grabber thread: `getImageRemote()` loop, writes raw YUYV422 to ffmpeg stdin
+   - ffmpeg encodes to H.264 baseline, outputs to TCP port 9998
+   - TCP server receives H.264 stream, splits by NALU separator `\x00\x00\x00\x01`
+   - Each NALU sent as Socket.IO binary event `serveurrobotvideo`
 
-| COMMANDS16 | Joint      | Conversion        |
-|------------|------------|-------------------|
-| [0] Turret X | HeadYaw  | degres -> radians |
-| [1] Turret Y | HeadPitch | degres -> radians |
+### Head mapping
 
-Vitesse : 0.3 (parametre HEAD_SPEED)
+| COMMANDS16 | Joint      | Conversion                     |
+|------------|------------|--------------------------------|
+| [0] Turret X | HeadYaw  | degrees -> radians             |
+| [1] Turret Y | HeadPitch | degrees -> radians (inverted) |
+
+Speed: 0.3 (HEAD_SPEED constant)
+
+### NAOqi idle rest prevention
+
+NAOqi has a hardcoded 30-second idle rest timer that cannot be configured or disabled. Investigation found:
+- `setStiffnesses('Body', 1.0)` does NOT reset the timer
+- `setAngles()` does NOT reset the timer
+- `wakeUp()` while already awake does NOT reset the timer
+- `moveToward(0, 0, 0)` does NOT reset the timer
+- `setSmartStiffnessEnabled(False)` does NOT prevent rest
+- `setIdlePostureEnabled('Body', False)` does NOT prevent rest
+
+**Solution**: Enable `ALBackgroundMovement` — its subtle idle movements reset the timer.
+Reference: http://doc.aldebaran.com/2-4/ref/life/autonomous_abilities_management.html
+
+Additionally, a `robotIsWakeUp` event subscription provides fast recovery if rest occurs despite ALBackgroundMovement.
 
 ### Timers
 
-| Timer     | Intervalle | Fonction                        |
-|-----------|------------|---------------------------------|
-| servo     | 50ms       | Ramping + apply motor commands  |
-| beacon    | 1000ms     | Envoi RX quand idle             |
-| cpu       | 2000ms     | Lecture /proc/stat              |
-| temp      | 5000ms     | Lecture thermal_zone0           |
-| wifi      | 5000ms     | Lecture /proc/net/wireless      |
-| battery   | 5000ms     | getBatteryCharge via NAOqi      |
-| keepalive | 10s        | Refresh stiffness tete          |
+| Timer     | Interval | Function                        |
+|-----------|----------|---------------------------------|
+| servo     | 50ms     | Ramping + apply motor commands  |
+| beacon    | 1000ms   | Send RX when idle               |
+| cpu       | 2000ms   | Read /proc/stat                 |
+| temp      | 5000ms   | Read thermal_zone0              |
+| wifi      | 5000ms   | Read /proc/net/wireless         |
+| battery   | 5000ms   | getBatteryCharge via NAOqi      |
+| keepalive | 2s       | Refresh body stiffness          |
 
-## Dependances
+## Dependencies
 
-- `websocket-client` 0.59.0 (installe dans `/data/vigiclient/lib`)
-- `six` (dependance de websocket-client)
-- SDK qi (`/opt/aldebaran/lib/python2.7/site-packages`)
+- `websocket-client` 0.59.0 (installed in `/data/vigiclient/lib`)
+- `six` (dependency of websocket-client)
+- NAOqi SDK (`/opt/aldebaran/lib/python2.7/site-packages`)
 
-## Deploiement
+## Key implementation notes
 
-```bash
-# Installer websocket-client
-ssh memmer "pip install --target=/data/vigiclient/lib 'websocket-client==0.59.0'"
-
-# Copier le script
-scp vigiclient.py memmer:/data/vigiclient/
-
-# Lancer
-ssh memmer "cd /data/vigiclient && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages nohup python2 -u vigiclient.py > /tmp/vigiclient_stdout.log 2>&1 &"
-```
-
-Note : le flag `-u` est necessaire (stdout buffered en Python 2 quand pas de TTY).
-
-## Etat actuel
-
-- **Phase 1 (fait)** : connexion vigibot, controle tete, wake/sleep, beacon RX, TTS, sensors
-- **Phase 2 (a faire)** : video streaming (ffmpeg -> TCP -> serveurrobotvideo)
-- **Phase 3 (a faire)** : parite complete (sys commands, camera switch, audio)
-
-## Compatibilite Python 3
-
-Ecrit en Python 2.7 avec un minimum de specificites 2.7 :
-- `print()` utilise comme fonction (compatible 2/3)
-- `//` pour division entiere
-- `sys.stdout.flush()` explicite
-- `bytes`/`str` : en Python 2 ce sont le meme type ; adapter pour Python 3
-- `dict.items()` : retourne une liste en 2.7, un view en 3.x (pas de probleme)
+- Python 2.7 with minimal 2.7-specific code (compatible path to Python 3)
+- `python2 -u` flag required (stdout fully buffered without TTY in Python 2)
+- Engine.IO 3 binary frames need `\x04` prefix when sending, strip when receiving
+- `boucleVideoCommande=0` from server means nobody controls; default to current time to avoid false latency alarm
+- `wakeUp()` throws "WakeUp not started" when robot is stuck in rest; recovery requires `setStiffnesses('Body', 1.0)` + `goToPosture('Stand')` before `wakeUp()`
+- ALVideoDevice subscribers must be cleared before subscribing (stale subscribers block camera)
+- `stop_diffusion()` pkill must be synchronous (`subprocess.call`) to avoid race with newly started ffmpeg

@@ -12,8 +12,10 @@ import json
 import time
 import math
 import struct
+import socket as socket_mod
 import threading
 import subprocess
+import re
 import ssl
 
 # Local lib path for websocket-client
@@ -690,7 +692,7 @@ class VigiSocket(object):
 # [0] Turret X -> HeadYaw (radians), [1] Turret Y -> HeadPitch (radians)
 PEPPER_JOINTS = [
     {'name': 'HeadYaw', 'index': 0, 'scale': math.pi / 180},
-    {'name': 'HeadPitch', 'index': 1, 'scale': math.pi / 180},
+    {'name': 'HeadPitch', 'index': 1, 'scale': -math.pi / 180},  # inverted: joystick up = look up
 ]
 HEAD_SPEED = 0.3
 
@@ -737,12 +739,21 @@ class VigiClient(object):
         # NAOqi
         self.qi_session = None
         self.motion = None
+        self.posture = None
         self.battery_svc = None
         self.tts = None
         self.video = None
+        self._wake_sub = None
 
         # CPU measurement
         self._prev_cpu = self._read_cpu_times()
+
+        # Video
+        self.cmd_diffusion = ''
+        self.conf_video = None
+        self._ffmpeg_proc = None
+        self._video_server_sock = None
+        self._video_server_started = False
 
         # Timers
         self._timers_started = False
@@ -765,7 +776,7 @@ class VigiClient(object):
             self.tts = self.qi_session.service('ALTextToSpeech')
             trace('ALTextToSpeech acquired', True)
 
-            # Disable autonomous life
+            # Disable autonomous life (full behavior engine)
             try:
                 life = self.qi_session.service('ALAutonomousLife')
                 life.setState('disabled')
@@ -773,31 +784,51 @@ class VigiClient(object):
             except Exception as e:
                 trace('ALAutonomousLife warning: %s' % e, True)
 
-            # Release cameras for ffmpeg
+            # Enable background movement (subtle idle activity, may reset rest timer)
+            try:
+                bg = self.qi_session.service('ALBackgroundMovement')
+                bg.setEnabled(True)
+                trace('ALBackgroundMovement enabled', True)
+            except Exception as e:
+                trace('ALBackgroundMovement warning: %s' % e, True)
+
+            # Enable autonomous blinking (harmless eye LEDs)
+            try:
+                blink = self.qi_session.service('ALAutonomousBlinking')
+                blink.setEnabled(True)
+                trace('ALAutonomousBlinking enabled', True)
+            except Exception as e:
+                trace('ALAutonomousBlinking warning: %s' % e, True)
+
+            # Get video service for frame grabbing
             try:
                 self.video = self.qi_session.service('ALVideoDevice')
-                subs = self.video.getSubscribers()
-                for sub in subs:
-                    try:
-                        self.video.unsubscribe(sub)
-                    except Exception:
-                        pass
-                trace('Released %d camera subscribers' % len(subs), True)
+                trace('ALVideoDevice acquired', True)
             except Exception as e:
-                trace('Camera release warning: %s' % e, True)
+                trace('ALVideoDevice warning: %s' % e, True)
 
             # Wake up (can block 15-30s, may fail if already awake)
             trace('Waking up robot...', True)
             try:
+                self.posture = self.qi_session.service('ALRobotPosture')
+                self.motion.setStiffnesses('Body', 1.0)
+                self.posture.goToPosture('Stand', 0.5)
                 self.motion.wakeUp()
                 trace('Robot is awake', True)
             except Exception as e:
                 trace('wakeUp warning (non-fatal): %s' % e, True)
 
-            # Set head stiffness
-            self.motion.setStiffnesses('HeadYaw', 1.0)
-            self.motion.setStiffnesses('HeadPitch', 1.0)
-            trace('Head stiffness set', True)
+            self.motion.setStiffnesses('Body', 1.0)
+            trace('Body stiffness set', True)
+
+            # Subscribe to robotIsWakeUp event for fast recovery from rest
+            try:
+                mem = self.qi_session.service('ALMemory')
+                self._wake_sub = mem.subscriber('robotIsWakeUp')
+                self._wake_sub.signal.connect(self._on_wake_change)
+                trace('Subscribed to robotIsWakeUp event', True)
+            except Exception as e:
+                trace('robotIsWakeUp subscribe error: %s' % e, True)
 
             self.init_naoqi = True
             self.init_done = True
@@ -820,15 +851,265 @@ class VigiClient(object):
                 except Exception as e:
                     trace('Motor error %s: %s' % (j['name'], e), False)
 
+    def _on_wake_change(self, value):
+        """Event callback when robotIsWakeUp changes"""
+        if not value:
+            trace('REST detected via event, recovering...', True)
+            try:
+                self.motion.setStiffnesses('Body', 1.0)
+                self.posture.goToPosture('Stand', 0.5)
+                self.motion.wakeUp()
+                trace('Recovered from rest, awake=%s' % self.motion.robotIsWakeUp(), True)
+            except Exception as e:
+                trace('Rest recovery error: %s' % e, True)
+
     def keepalive_naoqi(self):
-        """Refresh head stiffness to prevent NAOqi idle timeout"""
+        """Refresh body stiffness"""
         if not self.motion or not self.init_naoqi:
             return
         try:
-            self.motion.setStiffnesses('HeadYaw', 1.0)
-            self.motion.setStiffnesses('HeadPitch', 1.0)
+            self.motion.setStiffnesses('Body', 1.0)
         except Exception as e:
             trace('Keepalive error: %s' % e, True)
+
+    # --- Video streaming ---
+
+    def configure_video(self):
+        """Parse video config from server's CAMERAS settings"""
+        if not self.conf_video:
+            return
+        cv = self.conf_video
+        self._video_width = int(cv.get('WIDTH', 640))
+        self._video_height = int(cv.get('HEIGHT', 480))
+        self._video_fps = int(cv.get('FPS', 15))
+        self._video_bitrate = int(cv.get('BITRATE', 400))
+        # Camera index: 0=top, 1=bottom
+        self._video_camera = int(cv.get('SOURCE', 0))
+        trace('Video config: %dx%d @%dfps cam=%d bitrate=%d' % (
+            self._video_width, self._video_height, self._video_fps,
+            self._video_camera, self._video_bitrate), True)
+
+    def start_diffusion(self):
+        """Start video pipeline: ALVideoDevice -> ffmpeg stdin -> TCP -> NALU splitter"""
+        self.stop_diffusion()
+        if not self.video:
+            trace('No ALVideoDevice, skipping video', True)
+            return
+
+        trace('Starting H.264 video broadcast via ALVideoDevice', True)
+
+        # Build ffmpeg command: read raw YUYV from stdin, encode to H.264, output to TCP
+        w = getattr(self, '_video_width', 640)
+        h = getattr(self, '_video_height', 480)
+        fps = getattr(self, '_video_fps', 15)
+        bitrate = getattr(self, '_video_bitrate', 400)
+        cmd = ('ffmpeg -f rawvideo -pix_fmt yuyv422 -video_size %dx%d -framerate %d -i pipe: '
+               '-pix_fmt yuv420p -c:v libx264 -profile:v baseline -tune zerolatency '
+               '-preset ultrafast -x264-params keyint=%d:bframes=0:repeat-headers=1 '
+               '-b:v %d -f h264 tcp://127.0.0.1:%d' % (
+                   w, h, fps, fps, bitrate, SYS['VIDEOLOCALPORT']))
+        trace('ffmpeg command: %s' % cmd, False)
+
+        try:
+            self._ffmpeg_proc = subprocess.Popen(
+                cmd, shell=True, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            trace('ffmpeg started pid=%d' % self._ffmpeg_proc.pid, True)
+        except Exception as e:
+            trace('ffmpeg start error: %s' % e, True)
+            return
+
+        # Start ffmpeg stderr reader thread
+        def _ffmpeg_stderr_reader():
+            try:
+                for line in self._ffmpeg_proc.stderr:
+                    line = line.strip()
+                    if line:
+                        trace('ffmpeg: %s' % line, False)
+            except Exception:
+                pass
+        t_err = threading.Thread(target=_ffmpeg_stderr_reader)
+        t_err.daemon = True
+        t_err.start()
+
+        # Start frame grabber thread
+        self._diffusion_running = True
+        t = threading.Thread(target=self._frame_grabber_loop)
+        t.daemon = True
+        t.start()
+
+    def _frame_grabber_loop(self):
+        """Grab frames from ALVideoDevice and write to ffmpeg stdin"""
+        w = getattr(self, '_video_width', 640)
+        h = getattr(self, '_video_height', 480)
+        fps = getattr(self, '_video_fps', 15)
+        cam = getattr(self, '_video_camera', 0)
+        frame_interval = 1.0 / fps
+
+        # NAOqi resolution codes: 0=QQVGA(160x120) 1=QVGA(320x240) 2=VGA(640x480)
+        if w <= 160:
+            res = 0
+        elif w <= 320:
+            res = 1
+        else:
+            res = 2
+        # Colorspace 9 = kYUV422ColorSpace (YUYV, matches ffmpeg rawvideo input)
+        colorspace = 9
+
+        sub = None
+        try:
+            # Release all existing subscribers to free camera resources
+            for old_sub in self.video.getSubscribers():
+                try:
+                    self.video.unsubscribe(old_sub)
+                except Exception:
+                    pass
+            trace('Cleared existing camera subscribers', False)
+
+            sub = self.video.subscribeCamera('vigiclient_video', cam, res, colorspace, fps)
+            trace('Camera subscribed: %s (cam=%d res=%d cs=%d fps=%d)' % (
+                sub, cam, res, colorspace, fps), True)
+
+            frame_count = 0
+            while self._diffusion_running and self._ffmpeg_proc:
+                t0 = time.time()
+                try:
+                    img = self.video.getImageRemote(sub)
+                    if img and len(img) > 6 and img[6]:
+                        raw_data = img[6]
+                        if isinstance(raw_data, list):
+                            raw_data = bytes(bytearray(raw_data))
+                        elif not isinstance(raw_data, bytes):
+                            raw_data = bytes(raw_data)
+                        self._ffmpeg_proc.stdin.write(raw_data)
+                        frame_count += 1
+                        if frame_count <= 3 or frame_count % 100 == 0:
+                            trace('Frame %d: %d bytes written to ffmpeg' % (
+                                frame_count, len(raw_data)), False)
+                except IOError:
+                    trace('ffmpeg stdin closed', False)
+                    break
+                except Exception as e:
+                    trace('Frame grab error: %s' % e, False)
+
+                elapsed = time.time() - t0
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+        except Exception as e:
+            trace('Frame grabber error: %s' % e, True)
+        finally:
+            if sub:
+                try:
+                    self.video.unsubscribe(sub)
+                    trace('Camera unsubscribed: %s' % sub, True)
+                except Exception:
+                    pass
+
+    def stop_diffusion(self):
+        """Stop video pipeline"""
+        self._diffusion_running = False
+        if self._ffmpeg_proc:
+            trace('Stopping ffmpeg pid=%d' % self._ffmpeg_proc.pid, False)
+            try:
+                self._ffmpeg_proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self._ffmpeg_proc.terminate()
+                self._ffmpeg_proc.wait()
+            except Exception:
+                pass
+            self._ffmpeg_proc = None
+        # Kill any lingering ffmpeg processes (synchronous to avoid race)
+        try:
+            subprocess.call(['pkill', '-15', '-f', 'ffmpeg.*h264'])
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+    def start_video_server(self):
+        """Start TCP server that receives H.264 from ffmpeg and splits NALUs"""
+        if self._video_server_started:
+            return
+
+        self._video_server_started = True
+        self._video_server_sock = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+        self._video_server_sock.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_REUSEADDR, 1)
+        self._video_server_sock.bind(('127.0.0.1', SYS['VIDEOLOCALPORT']))
+        self._video_server_sock.listen(1)
+        trace('Video TCP server listening on port %d' % SYS['VIDEOLOCALPORT'], True)
+
+        t = threading.Thread(target=self._video_accept_loop)
+        t.daemon = True
+        t.start()
+
+    def _video_accept_loop(self):
+        """Accept ffmpeg connections and process H.264 stream"""
+        while True:
+            try:
+                conn, addr = self._video_server_sock.accept()
+                trace('ffmpeg connected to video TCP server', False)
+                t = threading.Thread(target=self._video_recv_loop, args=(conn,))
+                t.daemon = True
+                t.start()
+            except Exception as e:
+                trace('Video accept error: %s' % e, True)
+                break
+
+    def _video_recv_loop(self, conn):
+        """Receive H.264 stream, split by NALU separator, send to vigibot"""
+        NALU_SEP = b'\x00\x00\x00\x01'
+        buf = b''
+        nalu_count = 0
+        recv_count = 0
+        try:
+            while True:
+                data = conn.recv(65536)
+                if not data:
+                    trace('Video TCP: connection closed (no data)', False)
+                    break
+                recv_count += 1
+                if recv_count <= 3:
+                    trace('Video TCP recv #%d: %d bytes' % (recv_count, len(data)), False)
+                buf += data
+                while True:
+                    # Find NALU separator after first position
+                    idx = buf.find(NALU_SEP, 1)
+                    if idx < 0:
+                        break
+                    # Extract NALU (without the separator)
+                    nalu = buf[:idx]
+                    buf = buf[idx + 4:]
+                    # Strip leading separator from first NALU
+                    if nalu[:4] == NALU_SEP:
+                        nalu = nalu[4:]
+                    if nalu:
+                        nalu_count += 1
+                        if nalu_count <= 3 or nalu_count % 100 == 0:
+                            trace('NALU #%d: %d bytes' % (nalu_count, len(nalu)), False)
+                        self._send_video_nalu(nalu)
+        except Exception as e:
+            trace('Video recv error: %s' % e, False)
+        finally:
+            conn.close()
+            trace('ffmpeg disconnected from video TCP server', False)
+
+    def _send_video_nalu(self, nalu):
+        """Send one H.264 NALU to vigibot server"""
+        if not self.current_server:
+            return
+        sock = self.sockets.get(self.current_server)
+        if not sock or not sock.connected:
+            return
+        # During latency alarm, send empty data (pause video)
+        if self.latency_alarm:
+            nalu = b''
+        sock.emit_binary('serveurrobotvideo', {
+            'timestamp': int(time.time() * 1000),
+            'data': nalu,
+        })
 
     # --- Server connection ---
 
@@ -890,6 +1171,16 @@ class VigiClient(object):
 
         self.tx = TxFrame(self.conf['TX'])
         self.rx = RxFrame(self.conf['TX'], self.conf['RX'])
+
+        # Video config from CAMERAS + default command
+        cameras = self.hard.get('CAMERAS', [])
+        commands = self.conf.get('COMMANDS', [])
+        default_cmd = self.conf.get('DEFAULTCOMMAND', 0)
+        if cameras and commands and default_cmd < len(commands):
+            cam_idx = commands[default_cmd].get('CAMERA', 0)
+            if cam_idx < len(cameras):
+                self.conf_video = cameras[cam_idx]
+        self.configure_video()
 
         self.init_outputs()
 
@@ -1025,9 +1316,11 @@ class VigiClient(object):
 
         if self.motion:
             try:
-                self.motion.wakeUp()
+                self.motion.setStiffnesses('Body', 1.0)
             except Exception as e:
-                trace('wakeUp warning: %s' % e, True)
+                trace('Wake motor error: %s' % e, False)
+
+        self.start_diffusion()
 
         self.current_server = server
         self.up = True
@@ -1038,6 +1331,8 @@ class VigiClient(object):
             return
 
         trace('Robot sleep', False)
+
+        self.stop_diffusion()
 
         if self.conf.get('TX'):
             for i in range(len(self.conf['TX']['COMMANDS16'])):
@@ -1163,7 +1458,7 @@ class VigiClient(object):
         self._start_periodic('temp', SYS['TEMPRATE'] / 1000.0, self.read_temp)
         self._start_periodic('wifi', SYS['WIFIRATE'] / 1000.0, self.read_wifi)
         self._start_periodic('battery', SYS['GAUGERATE'] / 1000.0, self.read_battery)
-        self._start_periodic('keepalive', 10.0, self.keepalive_naoqi)
+        self._start_periodic('keepalive', 2.0, self.keepalive_naoqi)
 
     def _start_periodic(self, name, interval, func):
         def loop():
@@ -1316,6 +1611,9 @@ class VigiClient(object):
         if not self.init_naoqi_session():
             trace('NAOqi init failed, exiting', True)
             sys.exit(1)
+
+        # Start video TCP server (listens for ffmpeg H.264 output)
+        self.start_video_server()
 
         # Connect to vigibot servers
         self.connect_servers()

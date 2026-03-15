@@ -178,3 +178,10 @@ Deploy package: `python35_pepper_deploy.tar.gz` (45 MB, works on any Pepper 2.7.
 | memmer | `http://192.168.11.185/`      | `http://192.168.11.185/advanced/`    |
 
 AngularJS app, nginx 1.8.1.
+
+## NAOqi Documentation
+
+- Autonomous abilities management: http://doc.aldebaran.com/2-4/ref/life/autonomous_abilities_management.html
+  - ALBackgroundMovement must be enabled to prevent NAOqi 30s idle rest timer
+  - ALAutonomousBlinking can be enabled (harmless eye LEDs)
+  - ALAutonomousLife should be disabled (full behavior engine, interferes with remote control)
