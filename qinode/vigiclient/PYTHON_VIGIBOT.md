@@ -53,7 +53,7 @@ The Python rewrite connects directly to NAOqi via `qi.Session('tcp://127.0.0.1:9
 
 | COMMANDS16 | Joint      | Conversion                     |
 |------------|------------|--------------------------------|
-| [0] Turret X | HeadYaw  | degrees -> radians             |
+| [0] Turret X | HeadYaw  | degrees -> radians (inverted) |
 | [1] Turret Y | HeadPitch | degrees -> radians (inverted) |
 
 Speed: 0.3 (HEAD_SPEED constant)
@@ -83,7 +83,26 @@ Additionally, a `robotIsWakeUp` event subscription provides fast recovery if res
 | temp      | 5000ms   | Read thermal_zone0              |
 | wifi      | 5000ms   | Read /proc/net/wireless         |
 | battery   | 5000ms   | getBatteryCharge via NAOqi      |
-| keepalive | 2s       | Refresh body stiffness          |
+| keepalive | 5s       | Refresh body stiffness + finger wiggle |
+
+### Telemetry
+
+| VALUE | Source | Description |
+|-------|--------|-------------|
+| voltage (VALUES16[0]) | `3.0 + 1.2 * charge% / 100` | Simulated single LiIon cell (3.0–4.2V) |
+| battery (VALUES16[1]) | `ALBattery.getBatteryCharge()` | Charge percentage (0–100) |
+| cpu (VALUES8[0]) | `/proc/stat` delta | CPU load percentage |
+| temp (VALUES8[1]) | `/sys/class/thermal/thermal_zone0/temp` | SoC temperature (°C) |
+| link (VALUES8[2]) | `/proc/net/wireless` | WiFi link quality |
+| rssi (VALUES8[3]) | `/proc/net/wireless` | WiFi signal level (dBm) |
+
+### Finger animation
+
+The keepalive timer (every 5s) alternates both hands (LHand, RHand) between open (0.8) and closed (0.2) positions. This provides visible activity and, together with ALBackgroundMovement, prevents the NAOqi 30s idle rest timer.
+
+### Eye LED animation
+
+While video is streaming, a rotating animation runs on the FaceLeds (8 LEDs per eye). One LED pair is lit at full intensity while the rest are dimmed to 0.1, rotating every 150ms. The animation stops and LEDs restore to full when video stops.
 
 ## Dependencies
 

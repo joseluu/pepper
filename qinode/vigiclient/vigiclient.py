@@ -691,7 +691,7 @@ class VigiSocket(object):
 # Map COMMANDS16 to Pepper head joints
 # [0] Turret X -> HeadYaw (radians), [1] Turret Y -> HeadPitch (radians)
 PEPPER_JOINTS = [
-    {'name': 'HeadYaw', 'index': 0, 'scale': math.pi / 180},
+    {'name': 'HeadYaw', 'index': 0, 'scale': -math.pi / 180},  # inverted: joystick right = look right
     {'name': 'HeadPitch', 'index': 1, 'scale': -math.pi / 180},  # inverted: joystick up = look up
 ]
 HEAD_SPEED = 0.3
@@ -743,7 +743,10 @@ class VigiClient(object):
         self.battery_svc = None
         self.tts = None
         self.video = None
+        self.mem = None
+        self.leds = None
         self._wake_sub = None
+        self._eye_anim_running = False
 
         # CPU measurement
         self._prev_cpu = self._read_cpu_times()
@@ -800,6 +803,13 @@ class VigiClient(object):
             except Exception as e:
                 trace('ALAutonomousBlinking warning: %s' % e, True)
 
+            # Get ALLeds for eye animation during video
+            try:
+                self.leds = self.qi_session.service('ALLeds')
+                trace('ALLeds acquired', True)
+            except Exception as e:
+                trace('ALLeds warning: %s' % e, True)
+
             # Get video service for frame grabbing
             try:
                 self.video = self.qi_session.service('ALVideoDevice')
@@ -823,8 +833,8 @@ class VigiClient(object):
 
             # Subscribe to robotIsWakeUp event for fast recovery from rest
             try:
-                mem = self.qi_session.service('ALMemory')
-                self._wake_sub = mem.subscriber('robotIsWakeUp')
+                self.mem = self.qi_session.service('ALMemory')
+                self._wake_sub = self.mem.subscriber('robotIsWakeUp')
                 self._wake_sub.signal.connect(self._on_wake_change)
                 trace('Subscribed to robotIsWakeUp event', True)
             except Exception as e:
@@ -864,11 +874,18 @@ class VigiClient(object):
                 trace('Rest recovery error: %s' % e, True)
 
     def keepalive_naoqi(self):
-        """Refresh body stiffness"""
+        """Refresh stiffness and animate fingers"""
         if not self.motion or not self.init_naoqi:
             return
         try:
             self.motion.setStiffnesses('Body', 1.0)
+            # Wiggle fingers to generate activity (prevents 30s idle rest)
+            if not hasattr(self, '_finger_state'):
+                self._finger_state = False
+            self._finger_state = not self._finger_state
+            angle = 0.8 if self._finger_state else 0.2
+            self.motion.setAngles(
+                ['LHand', 'RHand'], [angle, angle], 0.2)
         except Exception as e:
             trace('Keepalive error: %s' % e, True)
 
@@ -897,6 +914,7 @@ class VigiClient(object):
             return
 
         trace('Starting H.264 video broadcast via ALVideoDevice', True)
+        self._start_eye_animation()
 
         # Build ffmpeg command: read raw YUYV from stdin, encode to H.264, output to TCP
         w = getattr(self, '_video_width', 640)
@@ -1009,6 +1027,7 @@ class VigiClient(object):
 
     def stop_diffusion(self):
         """Stop video pipeline"""
+        self._stop_eye_animation()
         self._diffusion_running = False
         if self._ffmpeg_proc:
             trace('Stopping ffmpeg pid=%d' % self._ffmpeg_proc.pid, False)
@@ -1028,6 +1047,41 @@ class VigiClient(object):
             time.sleep(0.2)
         except Exception:
             pass
+
+    def _start_eye_animation(self):
+        """Start rotating eye LED animation while video is streaming"""
+        if not self.leds:
+            return
+        self._eye_anim_running = True
+
+        def eye_loop():
+            # FaceLed groups: 8 LEDs per eye, named FaceLedRight0 .. FaceLedRight7
+            # and FaceLedLeft0 .. FaceLedLeft7
+            idx = 0
+            while self._eye_anim_running:
+                try:
+                    # Dim all eye LEDs
+                    self.leds.setIntensity('FaceLeds', 0.1)
+                    # Light up current LED pair brightly
+                    self.leds.setIntensity('FaceLedRight%d' % idx, 1.0)
+                    self.leds.setIntensity('FaceLedLeft%d' % idx, 1.0)
+                    idx = (idx + 1) % 8
+                except Exception:
+                    pass
+                time.sleep(0.15)
+            # Restore all eye LEDs on stop
+            try:
+                self.leds.setIntensity('FaceLeds', 1.0)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=eye_loop)
+        t.daemon = True
+        t.start()
+
+    def _stop_eye_animation(self):
+        """Stop eye LED animation"""
+        self._eye_anim_running = False
 
     def start_video_server(self):
         """Start TCP server that receives H.264 from ffmpeg and splits NALUs"""
@@ -1446,6 +1500,8 @@ class VigiClient(object):
             return
         try:
             self.battery = self.battery_svc.getBatteryCharge()
+            # Simulate single LiIon cell voltage from charge percentage
+            self.voltage = 3.0 + 1.2 * self.battery / 100.0
         except Exception:
             pass
 
@@ -1458,7 +1514,7 @@ class VigiClient(object):
         self._start_periodic('temp', SYS['TEMPRATE'] / 1000.0, self.read_temp)
         self._start_periodic('wifi', SYS['WIFIRATE'] / 1000.0, self.read_wifi)
         self._start_periodic('battery', SYS['GAUGERATE'] / 1000.0, self.read_battery)
-        self._start_periodic('keepalive', 2.0, self.keepalive_naoqi)
+        self._start_periodic('keepalive', 5.0, self.keepalive_naoqi)
 
     def _start_periodic(self, name, interval, func):
         def loop():
