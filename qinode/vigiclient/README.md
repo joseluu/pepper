@@ -30,22 +30,24 @@ The Python version connects directly to NAOqi via `qi.Session('tcp://127.0.0.1:9
 
 ### Quick install
 
+Download `vigiclient_pepper.tar.gz` from the [releases page](https://github.com/joseluu/pepper/releases), then:
+
 ```bash
 # From a machine with SSH access to the robot
-scp vigiclient_pepper.tar.gz nao@<robot-ip>:/data/
-ssh nao@<robot-ip> "cd /data && tar xzf vigiclient_pepper.tar.gz && rm vigiclient_pepper.tar.gz"
+scp vigiclient_pepper.tar.gz nao@<robot-ip>:/tmp/
+ssh nao@<robot-ip> "sudo mkdir -p /data/vigiclient && sudo chown nao:nao /data/vigiclient && cd /data && tar xzf /tmp/vigiclient_pepper.tar.gz && rm /tmp/vigiclient_pepper.tar.gz"
 ```
 
-This creates `/data/vigiclient/` with all dependencies included.
+This creates `/data/vigiclient/` with all dependencies (websocket-client, six) included.
 
 ### Configure credentials
 
 ```bash
 ssh nao@<robot-ip>
-cp /data/vigiclient/robot.json.example /data/vigiclient/robot.json
+cp /data/vigiclient/robot.json.example /home/nao/robot.json
 ```
 
-Edit `/data/vigiclient/robot.json`:
+Edit `/home/nao/robot.json`:
 
 ```json
 {
