@@ -181,6 +181,14 @@ AngularJS app, nginx 1.8.1.
 
 ## NAOqi Documentation
 
+**IMPORTANT:** When encountering an error or unforeseen behavior from the robot, always consult the official NAOqi documentation at http://doc.aldebaran.com/2-4/ before spending time debugging. Many issues are documented as Pepper-specific limitations or prerequisites.
+
+- ALMotion reference: http://doc.aldebaran.com/2-4/naoqi/motion/almotion.html
+  - **Power hatch must be closed** for locomotion (wheels) to work — otherwise silently ignored
+  - Power hatch sensor: `mem.getData('Device/SubDeviceList/Platform/ILS/Sensor/Value')` (0=closed, 1=open)
+  - Manual stiffness control is forbidden for Pepper's lower part
+  - Pepper-specific adaptations are listed under "Adaptation to Pepper specificities"
+- Pepper DCM sensor/actuator names: http://doc.aldebaran.com/2-4/family/pepper_technical/pepper_dcm/actuator_sensor_names.html
 - Autonomous abilities management: http://doc.aldebaran.com/2-4/ref/life/autonomous_abilities_management.html
   - ALBackgroundMovement must be enabled to prevent NAOqi 30s idle rest timer
   - ALAutonomousBlinking can be enabled (harmless eye LEDs)
