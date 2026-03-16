@@ -766,6 +766,7 @@ class VigiClient(object):
         self._ffmpeg_proc = None
         self._video_server_sock = None
         self._video_server_started = False
+        self._current_camera_choice = -1
 
         # Timers
         self._timers_started = False
@@ -953,6 +954,25 @@ class VigiClient(object):
             trace('Keepalive error: %s' % e, True)
 
     # --- Video streaming ---
+
+    def _check_camera_switch(self):
+        """Check if the user switched cameras on vigibot and restart video if needed."""
+        if not self.tx or self.tx.cam_len == 0:
+            return
+        choice = self.tx.get_camera_choice(0)
+        if choice == self._current_camera_choice:
+            return
+        self._current_camera_choice = choice
+        cameras = self.hard.get('CAMERAS', [])
+        # cameraChoices[0] is a direct index into CAMERAS (per reference vigiclient)
+        if choice < len(cameras):
+            self.conf_video = cameras[choice]
+            self.configure_video()
+            trace('Camera switch to camera %d (source %d)' % (
+                choice, self._video_camera), True)
+            if self.up:
+                self.stop_diffusion()
+                self.start_diffusion()
 
     def configure_video(self):
         """Parse video config from server's CAMERAS settings"""
@@ -1294,10 +1314,15 @@ class VigiClient(object):
         cameras = self.hard.get('CAMERAS', [])
         commands = self.conf.get('COMMANDS', [])
         default_cmd = self.conf.get('DEFAULTCOMMAND', 0)
+        trace('CAMERAS: %d, COMMANDS: %d, DEFAULTCOMMAND: %d' % (
+            len(cameras), len(commands), default_cmd), True)
+        # Init camera from COMMANDS[DEFAULTCOMMAND].CAMERA
+        cam_idx = 0
         if cameras and commands and default_cmd < len(commands):
             cam_idx = commands[default_cmd].get('CAMERA', 0)
             if cam_idx < len(cameras):
                 self.conf_video = cameras[cam_idx]
+        self._current_camera_choice = cam_idx
         self.configure_video()
 
         self.init_outputs()
@@ -1345,6 +1370,7 @@ class VigiClient(object):
             if ba[1] == FRAME1S:
                 self.tx.load_from(ba)
                 self.actions()
+                self._check_camera_switch()
 
             self.wake(server_url)
             self._reset_up_timeout()
