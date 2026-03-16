@@ -696,6 +696,14 @@ PEPPER_JOINTS = [
 ]
 HEAD_SPEED = 0.3
 
+# Map COMMANDS8 to Pepper base movement via moveToward(x, y, theta)
+# Vigibot sends: [0] Velocity X, [1] Velocity Y, [2] Velocity Theta (all -100..100%)
+# NOTE: Locomotion methods are prohibited if the power hatch is open (NAOqi doc).
+# Manual stiffness control is also forbidden for Pepper's lower part.
+# If wheels don't respond, check that the power hatch (on the back of the base) is closed.
+# Ref: http://doc.aldebaran.com/2-4/naoqi/motion/almotion.html
+MOVE_DEADZONE = 2.0  # ignore small joystick noise
+
 
 # --- Main Client ---
 
@@ -747,6 +755,7 @@ class VigiClient(object):
         self.leds = None
         self._wake_sub = None
         self._eye_anim_running = False
+        self._hatch_warned = False
 
         # CPU measurement
         self._prev_cpu = self._read_cpu_times()
@@ -852,6 +861,7 @@ class VigiClient(object):
         if not self.motion or not self.init_done:
             return
 
+        # Head control via COMMANDS16
         for j in PEPPER_JOINTS:
             idx = j['index']
             if idx < len(self.float_commands16):
@@ -860,6 +870,59 @@ class VigiClient(object):
                     self.motion.setAngles(j['name'], angle, HEAD_SPEED)
                 except Exception as e:
                     trace('Motor error %s: %s' % (j['name'], e), False)
+
+        # Base movement via COMMANDS8
+        # [0] Velocity X (forward/backward), [1] Velocity Y (lateral), [2] Velocity Theta (rotation)
+        x_val = self.float_commands8[0] if len(self.float_commands8) > 0 else 0.0
+        y_val = self.float_commands8[1] if len(self.float_commands8) > 1 else 0.0
+        theta_val = self.float_commands8[2] if len(self.float_commands8) > 2 else 0.0
+
+        # Apply deadzone
+        if abs(x_val) < MOVE_DEADZONE:
+            x_val = 0.0
+        if abs(y_val) < MOVE_DEADZONE:
+            y_val = 0.0
+        if abs(theta_val) < MOVE_DEADZONE:
+            theta_val = 0.0
+
+        # Vigibot cross buttons: up/down -> CMD8[1] (Y), left/right -> CMD8[2] (Theta)
+        # Map: CMD8[1] -> forward/backward, CMD8[2] -> rotation, CMD8[0] -> lateral
+        x_speed = y_val / 100.0
+        y_speed = x_val / 100.0
+        theta_speed = theta_val / 100.0
+
+        try:
+            if abs(x_speed) > 0.0 or abs(y_speed) > 0.0 or abs(theta_speed) > 0.0:
+                # Check power hatch before moving
+                if self.mem and self._is_hatch_open():
+                    if not self._hatch_warned:
+                        trace('Power hatch is open — locomotion disabled', True)
+                        if self.tts:
+                            try:
+                                self.tts.say('Power hatch is open')
+                            except Exception:
+                                pass
+                        self._hatch_warned = True
+                else:
+                    self._hatch_warned = False
+                    self.motion.moveToward(x_speed, y_speed, theta_speed)
+            else:
+                if not hasattr(self, '_was_moving'):
+                    self._was_moving = False
+                if self._was_moving:
+                    self.motion.stopMove()
+                    self._was_moving = False
+        except Exception as e:
+            trace('Move error: %s' % e, False)
+
+        self._was_moving = abs(x_speed) > 0.0 or abs(y_speed) > 0.0 or abs(theta_speed) > 0.0
+
+    def _is_hatch_open(self):
+        """Check if the power hatch is open (0=closed, 1=open)."""
+        try:
+            return self.mem.getData('Device/SubDeviceList/Platform/ILS/Sensor/Value') > 0.5
+        except Exception:
+            return False
 
     def _on_wake_change(self, value):
         """Event callback when robotIsWakeUp changes"""
@@ -1222,6 +1285,7 @@ class VigiClient(object):
         trace('Receiving robot configuration', True)
         self.conf = data['conf']
         self.hard = data['hard']
+
 
         self.tx = TxFrame(self.conf['TX'])
         self.rx = RxFrame(self.conf['TX'], self.conf['RX'])
