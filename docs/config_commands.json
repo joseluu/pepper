@@ -1,0 +1,28 @@
+{
+  "COMMANDS": [
+    {
+      "NAME": "Top camera",
+      "CAMERA": 0,
+      "MIXING": 0,
+      "GAINX": 80,
+      "GAINY": 80
+    },
+    {
+      "NAME": "Mouth camera",
+      "CAMERA": 1,
+      "MIXING": 1,
+      "GAINX": 80,
+      "GAINY": 80
+    },
+    {
+      "NAME": "Depth camera",
+      "CAMERA": 2,
+      "MIXING": 1,
+      "GAINX": 80,
+      "GAINY": 80
+    }
+  ]
+}
+
+
+×
