@@ -1,0 +1,66 @@
+# Frigate camera configuration for the Pepper robot.
+# Merge these blocks into your main Frigate config.yml (e.g. /config/config.yml).
+# Replace 192.168.11.182 with your robot's IP (.182 = WiFi, .183 = Ethernet).
+#
+# IMPORTANT: the streams are MJPEG. An NVIDIA GPU (e.g. P2000) cannot hardware
+# decode MJPEG (NVDEC has no JPEG decoder), so override hwaccel_args to [] on
+# these cameras to force lightweight CPU decoding. Leave your other H264/H265
+# cameras on nvidia hwaccel as usual.
+
+cameras:
+  # Head camera (forehead) — bridged from NAOqi, ONVIF PTZ controllable
+  pepper_head:
+    enabled: true
+    ffmpeg:
+      hwaccel_args: []                 # MJPEG -> CPU decode, never the GPU NVDEC
+      inputs:
+        - path: rtsp://192.168.11.182:8554/head
+          input_args: preset-rtsp-generic
+          roles: [ detect, record ]
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 5
+    record:
+      enabled: true
+      retain:
+        days: 3
+        mode: motion
+    onvif:
+      host: 192.168.11.182
+      port: 8000
+      user: "admin"                    # credentials are ignored by the bridge
+      password: "admin"
+      # autotracking:                  # optional, experimental
+      #   enabled: true
+      #   track: [ person ]
+      #   zooming: disabled
+
+  # Bottom camera (mouth) — direct V4L2 capture, no PTZ
+  pepper_bottom:
+    enabled: true
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+        - path: rtsp://192.168.11.182:8554/bottom
+          input_args: preset-rtsp-generic
+          roles: [ detect, record ]
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 5
+    record:
+      enabled: true
+      retain:
+        days: 3
+        mode: motion
+
+# Optional: smooth low-latency live view (WebRTC/MSE) via Frigate's built-in go2rtc
+go2rtc:
+  streams:
+    pepper_head:
+      - rtsp://192.168.11.182:8554/head
+    pepper_bottom:
+      - rtsp://192.168.11.182:8554/bottom

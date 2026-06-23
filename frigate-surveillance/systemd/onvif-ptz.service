@@ -1,0 +1,18 @@
+[Unit]
+Description=ONVIF PTZ bridge (Frigate to Pepper head via ALMotion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nao
+Group=nao
+Environment=PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages
+Environment=ONVIF_HOST=192.168.11.182
+WorkingDirectory=/data/onvif
+ExecStart=/usr/bin/python2 /data/onvif/onvif_ptz.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
