@@ -1,0 +1,16 @@
+[Unit]
+Description=go2rtc camera streamer (Pepper cameras -> RTSP/MJPEG for Frigate)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nao
+Group=nao
+WorkingDirectory=/data/go2rtc
+ExecStart=/data/go2rtc/go2rtc -config /data/go2rtc/go2rtc.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

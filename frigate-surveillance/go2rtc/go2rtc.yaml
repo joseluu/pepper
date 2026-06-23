@@ -1,0 +1,15 @@
+log:
+  level: info
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+
+streams:
+  # Bottom camera (mouth) - free V4L2 device, direct ffmpeg capture
+  bottom: exec:ffmpeg -hide_banner -loglevel error -f v4l2 -input_format yuyv422 -video_size 640x480 -framerate 10 -i /dev/video-bottom -c:v mjpeg -q:v 5 -f mjpeg -
+
+  # Head camera (top, forehead) - held by naoqi-service, bridged via ALVideoDevice
+  head: exec:sh -c "exec env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 /data/go2rtc/naoqi_cam.py 0 2 10"

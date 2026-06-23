@@ -18,3 +18,5 @@ __pycache__/
 
 # OS
 .DS_Store
+update/
+update.zip
