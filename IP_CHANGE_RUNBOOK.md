@@ -124,18 +124,47 @@ ssh pepper 'PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 -c \
 
 ---
 
-## 6. Prévention durable (à faire une fois)
+## 6. Prévention durable
 
-1. **Réservation DHCP sur la Freebox** — associer la MAC du robot à une IP fixe.
-   La réservation fige aussi la résolution du nom.
-2. **Toujours adresser par nom**, jamais par IP :
-   - `~/.ssh/config` : `HostName <robot>.<domaine-lan>` (déjà fait pour `pepper`,
-     **à faire pour `memmer`** qui est encore en `192.168.11.185`).
+### L'essentiel est déjà en place : DHCP ↔ DNS coordonnés (DDNS) sur tram
+
+`tram` héberge **isc-dhcp-server** (dhcpd, `:67`) **et** **BIND** (named, `:53`),
+couplés en **mise à jour dynamique** :
+
+- dhcpd : `ddns-update-style standard; ddns-updates on; ddns-domainname "<domaine-lan>";`
+  avec les zones `<domaine-lan>.` et `11.168.192.in-addr.arpa.` signées par la clé
+  TSIG `ddns-key`.
+- named : ces deux zones ont `allow-update { key "ddns-key"; };`.
+
+**Conséquence : dès qu'un robot prend ou renouvelle son bail, son `A` (et son
+`PTR` inverse) est publié dans le DNS dans la seconde.** Vérifié : `pepper` →
+`192.168.11.228` en direct, avec enregistrement `DHCID` à l'appui. Une réservation
+DHCP n'est donc **pas nécessaire** pour la stabilité du **nom** (elle ne sert que
+si un tiers exige une **IP** figée).
+
+Le robot s'enregistre sous le **`client-hostname`** qu'envoie son client DHCP,
+c'est-à-dire son **hostname système** (`pepper`, `memmer`). Vérifier ce nom si un
+robot n'apparaît pas :
+```bash
+ssh <robot> hostname           # doit valoir pepper / memmer
+dig +short @192.168.11.135 <robot>.<domaine-lan>     # doit renvoyer son IP courante
+```
+> Un robot absent du DNS = très probablement **éteint / sans bail actif** (cas de
+> `memmer` quand son chargeur n'est pas branché), pas un défaut de config.
+
+### À faire une fois
+
+1. **Toujours adresser par nom**, jamais par IP :
+   - `~/.ssh/config` : `HostName <robot>.<domaine-lan>` (déjà fait pour `pepper` ;
+     **à faire pour `memmer`** qui est encore en `192.168.11.185`, et pour les
+     alias `*_wired`).
    - Config Frigate : noms dans `rtsp://` et `onvif: host:`.
+2. *(Optionnel)* **Réservation DHCP** sur le serveur dhcpd de tram si tu veux en
+   plus figer l'**IP** d'un robot (associer sa MAC à une `fixed-address`).
 3. **Préférer le filaire** pour un usage caméra de surveillance fixe : `eth0` est
    stable et ne subit ni le churn DHCP WiFi ni les interférences. (Brancher un
-   câble ; eth0 prend alors sa propre IP via sa propre MAC — penser à pointer le
-   nom DNS vers cette IP.)
+   câble ; eth0 a sa **propre MAC** donc sa propre IP/bail — il s'enregistrera
+   dans le DNS sous le même hostname, donc le nom suivra automatiquement.)
 
 ---
 
