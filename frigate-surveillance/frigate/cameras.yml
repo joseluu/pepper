@@ -1,6 +1,8 @@
 # Frigate camera configuration for the Pepper robot.
 # Merge these blocks into your main Frigate config.yml (e.g. /config/config.yml).
-# Replace 192.168.11.182 with your robot's IP (.182 = WiFi, .183 = Ethernet).
+# Address the robot by a STABLE DNS NAME, not an IP: Pepper's WiFi IP is DHCP and
+# changes. Here we use pepper.<domaine-lan> — replace it with your robot's name.
+# (The ONVIF bridge echoes the Host header, so PTZ follows the name automatically.)
 #
 # IMPORTANT: the streams are MJPEG. An NVIDIA GPU (e.g. P2000) cannot hardware
 # decode MJPEG (NVDEC has no JPEG decoder), so override hwaccel_args to [] on
@@ -14,7 +16,7 @@ cameras:
     ffmpeg:
       hwaccel_args: []                 # MJPEG -> CPU decode, never the GPU NVDEC
       inputs:
-        - path: rtsp://192.168.11.182:8554/head
+        - path: rtsp://pepper.<domaine-lan>:8554/head
           input_args: preset-rtsp-generic
           roles: [ detect, record ]
     detect:
@@ -28,7 +30,7 @@ cameras:
         days: 3
         mode: motion
     onvif:
-      host: 192.168.11.182
+      host: pepper.<domaine-lan>
       port: 8000
       user: "admin"                    # credentials are ignored by the bridge
       password: "admin"
@@ -43,7 +45,7 @@ cameras:
     ffmpeg:
       hwaccel_args: []
       inputs:
-        - path: rtsp://192.168.11.182:8554/bottom
+        - path: rtsp://pepper.<domaine-lan>:8554/bottom
           input_args: preset-rtsp-generic
           roles: [ detect, record ]
     detect:
@@ -61,6 +63,6 @@ cameras:
 go2rtc:
   streams:
     pepper_head:
-      - rtsp://192.168.11.182:8554/head
+      - rtsp://pepper.<domaine-lan>:8554/head
     pepper_bottom:
-      - rtsp://192.168.11.182:8554/bottom
+      - rtsp://pepper.<domaine-lan>:8554/bottom
