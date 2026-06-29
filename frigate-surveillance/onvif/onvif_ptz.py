@@ -3,9 +3,9 @@
 # Speaks just enough ONVIF (device/media/ptz, SOAP 1.2) for Frigate's
 # onvif-zeep client, and maps PTZ moves to ALMotion HeadYaw/HeadPitch.
 #
-# Listens on :8000. Frigate camera config:
+# Listens on :8000. Frigate camera config (use a DNS name, not a DHCP IP):
 #   onvif:
-#     host: 192.168.11.182
+#     host: pepper.<domaine-lan>
 #     port: 8000
 #     user: ""        # auth is ignored
 #     password: ""
@@ -20,7 +20,15 @@ import qi
 
 # ---------------------------------------------------------------- config
 LISTEN_PORT = 8000
-ADVERTISE_HOST = os.environ.get("ONVIF_HOST", "192.168.11.182")
+# Fallback advertise host. Normally the XAddrs echo back the Host header the
+# client actually used to reach us (see _req / do_POST), so PTZ keeps working
+# even if the robot's DHCP IP changes. ONVIF_HOST is only used if a request
+# carries no Host header.
+ADVERTISE_HOST = os.environ.get("ONVIF_HOST", "pepper.<domaine-lan>")
+
+# Per-request advertise host (the Host: header the client connected with),
+# stored thread-locally so XADDR() can build matching service URLs.
+_req = threading.local()
 PROFILE_TOKEN = "profile_head"
 PTZ_CONFIG_TOKEN = "ptz0"
 PTZ_NODE_TOKEN = "ptznode0"
@@ -194,7 +202,12 @@ def localname(tag):
     return tag.rsplit('}', 1)[-1] if '}' in tag else tag
 
 def XADDR(path):
-    return "http://%s:%d/onvif/%s" % (ADVERTISE_HOST, LISTEN_PORT, path)
+    # Prefer the Host header the client used (survives DHCP IP changes); fall
+    # back to ONVIF_HOST. Ensure the port is present either way.
+    host = getattr(_req, 'host', None) or ADVERTISE_HOST
+    if ':' not in host:
+        host = "%s:%d" % (host, LISTEN_PORT)
+    return "http://%s/onvif/%s" % (host, path)
 
 def r_GetSystemDateAndTime(root):
     t = time.gmtime()
@@ -533,6 +546,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        # Echo back whatever host/IP the client used to reach us, so the
+        # service XAddrs we advertise stay reachable across DHCP IP changes.
+        _req.host = self.headers.get('Host') or None
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length) if length else ''
         op = '?'

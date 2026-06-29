@@ -63,10 +63,13 @@ frigate-surveillance/
 │   ├── go2rtc.yaml            go2rtc config (two MJPEG streams)
 │   └── naoqi_cam.py           NAOqi → MJPEG bridge for the head camera
 ├── onvif/
-│   └── onvif_ptz.py           minimal ONVIF PTZ server → ALMotion head control
+│   ├── onvif_ptz.py           minimal ONVIF PTZ server → ALMotion head control
+│   └── pepper_keepawake.py    periodic check: wake the robot if it has rested
 ├── systemd/
 │   ├── go2rtc.service         runs go2rtc on boot
-│   └── onvif-ptz.service      runs the ONVIF PTZ bridge on boot
+│   ├── onvif-ptz.service      runs the ONVIF PTZ bridge on boot
+│   ├── pepper-keepawake.service  oneshot keep-awake check
+│   └── pepper-keepawake.timer    runs the check every 6 h
 └── frigate/
     └── cameras.yml            camera blocks to merge into your Frigate config
 ```
@@ -139,9 +142,15 @@ scp go2rtc/naoqi_cam.py  pepper:/data/go2rtc/naoqi_cam.py
 scp onvif/onvif_ptz.py   pepper:/data/onvif/onvif_ptz.py
 ```
 
-If your robot IP differs, edit `ONVIF_HOST` in `systemd/onvif-ptz.service` and the
-`ADVERTISE_HOST` default in `onvif_ptz.py` (or just keep them in sync with the IP
-Frigate uses to reach the robot).
+> **Use a hostname, not a hardcoded IP.** Pepper's WiFi address is handed out by
+> DHCP and *will* change. When it does, anything pinned to the old IP breaks. The
+> ONVIF bridge guards against this by **echoing back the `Host:` header the client
+> used** when it advertises its service URLs (so PTZ keeps working as long as
+> Frigate reaches the robot by a name that still resolves). Point Frigate's
+> `rtsp://…` and `onvif: host:` at a stable DNS name (e.g. `pepper.<domaine-lan>`),
+> and set a **DHCP reservation** on your router so the name keeps resolving. The
+> `ONVIF_HOST` env in `systemd/onvif-ptz.service` is only a fallback for clients
+> that send no `Host` header.
 
 ### 3. Install and start the systemd services
 
@@ -214,6 +223,37 @@ ssh pepper 'sudo systemctl restart go2rtc onvif-ptz'
 
 ---
 
+## Keeping the robot awake
+
+NAOqi puts Pepper to **rest** after ~30 s of inactivity; once rested the joints go
+limp and `setAngles` is silently ignored, so PTZ does nothing until the next
+`wakeUp()`. The ONVIF bridge wakes the robot on demand, but a periodic safety net
+keeps it ready (and re-enables `ALBackgroundMovement`).
+
+NAOqiOS has **no cron daemon**, so this is a **systemd timer**:
+
+```bash
+scp onvif/pepper_keepawake.py        pepper:/data/onvif/pepper_keepawake.py
+scp systemd/pepper-keepawake.service pepper:/tmp/
+scp systemd/pepper-keepawake.timer   pepper:/tmp/
+ssh pepper '
+  chmod +x /data/onvif/pepper_keepawake.py &&
+  sudo mv /tmp/pepper-keepawake.service /tmp/pepper-keepawake.timer /etc/systemd/system/ &&
+  sudo systemctl daemon-reload &&
+  sudo systemctl enable --now pepper-keepawake.timer &&
+  systemctl list-timers pepper-keepawake.timer'
+```
+
+Runs every 6 h (`OnUnitActiveSec=6h`, `Persistent=true`), logging one line per
+check to `/data/onvif/keepawake.log`. Force a check with
+`sudo systemctl start pepper-keepawake.service`.
+
+> Heads-up on CPU: even with no video streaming, `naoqi-service` alone uses ~2 of
+> the 4 Atom cores because Pepper's autonomous **3D-vision / navigation** stack
+> (stereo + depth + `VisionNavigation`) runs continuously. Lowering stream fps
+> barely changes the total; meaningfully freeing CPU means disabling that
+> autonomous stack (a behaviour change) or rebooting a long-up robot.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -224,6 +264,8 @@ ssh pepper 'sudo systemctl restart go2rtc onvif-ptz'
 | PTZ command reaches the robot but the head doesn't move | Robot was asleep (`robotIsWakeUp() == False`). The bridge calls `wakeUp()`; ensure `KEEP_AWAKE=True`. Head stiffness can read `1.0` even while rested — don't trust it. |
 | Up/down overshoots on small taps | Lower `PITCH_SPEED_SCALE`. |
 | Frigate (0.17) shows no arrows at all | 0.17 requires an ONVIF **imaging** service; `onvif_ptz.py` advertises and answers it. Make sure you deployed the current version and restarted Frigate. |
+| Arrows were working, now gone; Frigate log: *"Unable to get Onvif media profiles … timed out"* | The robot's **DHCP IP changed** and a stale IP was being advertised. Use a DNS name in the Frigate config (the bridge echoes the `Host` header, so XAddrs follow it) and add a DHCP reservation. `ping` may work while TCP fails if you test from the wrong host — see next row. |
+| ONVIF/RTSP unreachable from the Frigate **host shell** but Frigate still can't connect | Frigate runs in a docker container with its own network path. Test from the container: `ssh <frigate-host> 'docker exec frigate curl -m5 http://<robot-name>:8000/onvif/device_service -d ...'`, not from the host shell. |
 | Check what the robot received | `ssh pepper 'journalctl -u onvif-ptz -f'` logs every `ONVIF REQ from <ip> op=<op>`. |
 
 ---

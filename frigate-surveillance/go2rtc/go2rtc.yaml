@@ -8,8 +8,13 @@ rtsp:
   listen: ":8554"
 
 streams:
+  # Source framerate is 5 fps to match Frigate's detect fps (no point shipping
+  # frames Frigate drops). The head pipeline goes through NAOqi, so its cost is
+  # the main lever on the robot's weak Atom — keep this <= detect fps.
+
   # Bottom camera (mouth) - free V4L2 device, direct ffmpeg capture
-  bottom: exec:ffmpeg -hide_banner -loglevel error -f v4l2 -input_format yuyv422 -video_size 640x480 -framerate 10 -i /dev/video-bottom -c:v mjpeg -q:v 5 -f mjpeg -
+  bottom: exec:ffmpeg -hide_banner -loglevel error -f v4l2 -input_format yuyv422 -video_size 640x480 -framerate 5 -i /dev/video-bottom -c:v mjpeg -q:v 5 -f mjpeg -
 
   # Head camera (top, forehead) - held by naoqi-service, bridged via ALVideoDevice
-  head: exec:sh -c "exec env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 /data/go2rtc/naoqi_cam.py 0 2 10"
+  # args: <camera> <resolution> <fps>  (0=top cam, 2=VGA 640x480, 5 fps)
+  head: exec:sh -c "exec env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 /data/go2rtc/naoqi_cam.py 0 2 5"

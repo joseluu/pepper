@@ -8,7 +8,9 @@ Type=simple
 User=nao
 Group=nao
 Environment=PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages
-Environment=ONVIF_HOST=192.168.11.182
+# Fallback advertise host only — the bridge normally echoes the Host header the
+# client used, so PTZ survives DHCP IP changes. Use a stable DNS name here.
+Environment=ONVIF_HOST=pepper.<domaine-lan>
 WorkingDirectory=/data/onvif
 ExecStart=/usr/bin/python2 /data/onvif/onvif_ptz.py
 Restart=on-failure

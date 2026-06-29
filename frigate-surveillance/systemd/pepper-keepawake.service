@@ -1,0 +1,9 @@
+[Unit]
+Description=Pepper keep-awake check (wake robot if rested, ensure background movement)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=nao
+Environment=PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages
+ExecStart=/usr/bin/python2 /data/onvif/pepper_keepawake.py
