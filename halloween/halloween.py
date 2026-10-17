@@ -10,11 +10,13 @@
 #
 # Lancement sur le robot :
 #   PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 halloween.py
-# Options : --test (declenche une fois tout de suite), --volume N, --dist M
+# Options : --test (declenche une fois tout de suite), --volume N, --dist M,
+#   --no-alarm, --alarm-tilt DEG, --alarm-debug, --test-alarm (voir antivol.py)
 import sys, os, time, math, argparse
 
 sys.stdout = sys.stderr  # qi ecrit ses [W] sur stdout
 import qi
+import antivol
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOUND = os.path.join(HERE, "thriller_laugh.wav")
@@ -83,6 +85,7 @@ class Ghost(object):
         self.finger_up = False
         self.last_finger = 0.0
         self.last_check = 0.0
+        self.alarm = None
 
     def _svc(self, name):
         try:
@@ -169,6 +172,8 @@ class Ghost(object):
 
     def scare(self):
         log("BOUH !")
+        if self.alarm:
+            self.alarm.reset_peaks()  # pour calibrer : ce que le BOUH secoue
         self.motion.setStiffnesses("Head", 1.0)
         self.leds_red()
         old_vol = self.audio.getOutputVolume()
@@ -192,13 +197,21 @@ class Ghost(object):
             time.sleep(0.9)
         self.motion.setAngles("HipRoll", 0.0, 0.10)
         play.wait()
-        # voix grave (vct) et lente (rspd), en pourcentage de la normale
-        self.tts.setLanguage("English")
-        self.tts.say("\\vct=60\\ \\rspd=75\\ " + self.args.phrase)
-        self.audio.setOutputVolume(old_vol)
+        if not self.alarm_active():
+            # voix grave (vct) et lente (rspd), en pourcentage de la normale
+            self.tts.setLanguage("English")
+            self.tts.say("\\vct=60\\ \\rspd=75\\ " + self.args.phrase)
+            self.audio.setOutputVolume(old_vol)
         self.go_rest(3.0)
+        if self.alarm:
+            p = self.alarm.peaks
+            log("secousse du BOUH (base) : inclinaison %.1f deg, ecart acc %.2f, "
+                "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
         time.sleep(self.args.cooldown)
         self.baseline = None  # le fond peut avoir change (gens, drap)
+
+    def alarm_active(self):
+        return self.alarm is not None and self.alarm.active
 
     def run(self):
         self.quiet_autonomy()
@@ -208,7 +221,15 @@ class Ghost(object):
             time.sleep(2)
             self.scare()
             return
+        if not self.args.no_alarm:
+            self.alarm = antivol.TheftAlarm(self.session, self.args.alarm_tilt,
+                                            debug=self.args.alarm_debug)
+            self.alarm.start()
         while True:
+            if self.alarm_active():   # sirene : le fantome ne fait plus rien
+                time.sleep(0.5)
+                self.baseline = None
+                continue
             now = time.time()
             if now - self.last_check > 30:
                 self.last_check = now
@@ -231,9 +252,26 @@ def main():
     p.add_argument("--dist", type=float, default=1.5)
     p.add_argument("--cooldown", type=float, default=5.0)
     p.add_argument("--phrase", default="Trick or treat!")
+    p.add_argument("--no-alarm", action="store_true", help="sans anti-vol")
+    p.add_argument("--alarm-tilt", type=float, default=8.0,
+                   help="inclinaison (deg) qui declenche la sirene")
+    p.add_argument("--alarm-debug", action="store_true",
+                   help="journalise les ecarts max de la centrale toutes les 10 s")
+    p.add_argument("--test-alarm", action="store_true",
+                   help="joue la sirene 5 s (gyrophare compris) et quitte")
     args = p.parse_args()
     s = qi.Session()
     s.connect("tcp://127.0.0.1:9559")
+    if args.test_alarm:
+        a = antivol.TheftAlarm(s)
+        old = a.audio.getOutputVolume()
+        a.start_siren("test")
+        for i in range(10):
+            a.leds.fadeRGB("FaceLeds", 0xFF0000 if i % 2 else 0x0000FF, 0.0)
+            time.sleep(0.5)
+        a.stop_siren()
+        a.audio.setOutputVolume(old)
+        return
     g = Ghost(s, args)
     try:
         g.run()

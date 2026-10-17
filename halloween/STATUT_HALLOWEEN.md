@@ -23,7 +23,7 @@ Pepper, sous un drap blanc, dehors et immobile, joue le fantôme :
 | LED | ✅ yeux + épaules en rouge ; oreilles éteintes (choix de l'utilisateur, elles n'ont que du bleu) |
 | Chauffe en attente | ⚠️ corrigée (tête relâchée, buste à demi penché), à surveiller sur une longue durée |
 | Démarrage automatique au boot | ❌ pas installé : il faut le lancer à la main (voir plus bas) |
-| Alarme anti-vol (sirène) | ❌ pour plus tard, voir `TODO.md` |
+| Alarme anti-vol (sirène) | 🟡 codée (`antivol.py`), simulée hors robot, **pas encore testée sur le robot** (plan dans `TODO.md`) |
 | Connexion | ✅ WiFi seul suffit (`ssh pepper`) ; câble réseau et tablette débranchés |
 
 ## Fichiers
@@ -35,7 +35,11 @@ Dans le dépôt (`halloween/`) et sur le robot (`/home/nao/halloween/`) :
 | `halloween.py` | Le programme (Python 2.7 + `qi`, tourne **sur le robot**) |
 | `thriller_laugh.wav` | Le rire (12,3 s, WAV 48 kHz stéréo), converti depuis `%USERPROFILE%\Downloads\Thriller End Laugh - rire (36).mp3` avec ffmpeg (sans la pochette) |
 | `temps.py` | Relevé de température + état des moteurs à risque (cou, hanches, genoux) |
-| `TODO.md` | Alarme anti-vol à faire plus tard |
+| `antivol.py` | Alarme anti-vol (module importé par `halloween.py`) |
+| `siren.wav` | Sirène de police « wail » synthétisée (6 s, boucle sans coupure) |
+| `make_siren.py` | Régénère `siren.wav` (Python 3, sur le PC) |
+| `simu_antivol.py` | Simulation hors robot de la détection anti-vol (Python 3) |
+| `TODO.md` | Plan de test de l'alarme anti-vol |
 | `run.log` (robot seulement) | Journal du programme (détections, BOUH) |
 
 `/data` n'est **pas** inscriptible par `nao` (seul `/data/home/nao` l'est), d'où
@@ -45,7 +49,7 @@ l'installation dans `~/halloween`.
 
 ```bash
 # Déployer depuis le PC
-cd halloween && scp halloween.py temps.py thriller_laugh.wav pepper:halloween/
+cd halloween && scp halloween.py antivol.py temps.py thriller_laugh.wav siren.wav pepper:halloween/
 
 # Lancer en mode détection (attend qu'on passe devant)
 ssh pepper 'cd ~/halloween && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages setsid nohup python2 halloween.py > run.log 2>&1 < /dev/null &'
@@ -54,6 +58,10 @@ ssh pepper 'cd ~/halloween && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packa
 #   ... python2 halloween.py --test
 # Options : --dist 1.5 (seuil m), --volume 85, --cooldown 5 (s après un BOUH),
 #           --phrase "Trick or treat!" (dite après le rire)
+#           --no-alarm, --alarm-tilt 8 (deg), --alarm-debug, --test-alarm
+
+# Désarmer la sirène anti-vol (ré-armement 30 s plus tard)
+ssh pepper 'touch ~/halloween/desarme'
 
 # Journal
 ssh pepper 'grep -v -E "sdklayout|transportsocket" ~/halloween/run.log'
@@ -118,6 +126,38 @@ Au lancement, il faut ~15 s avant « fantome en place » : c'est le `wakeUp()`.
      anglaise (`ALTextToSpeech`, balises `\\vct=60\\ \\rspd=75\\` : voix grave et lente ;
      phrase réglable avec `--phrase`), rétablit le volume, revient en attente en 3 s,
      LED éteintes, pause de 5 s.
+
+## Alarme anti-vol (`antivol.py`)
+
+Pas encore testée sur le robot. Elle démarre avec le fantôme, sauf `--no-alarm`.
+
+- Capteur : centrale inertielle de la **base**
+  (`Device/SubDeviceList/InertialSensorBase/{AngleX,AngleY,Accelerometer*,Gyroscope*}/Sensor/Value`),
+  lue à 20 Hz dans un fil séparé. Celle du torse est en panne.
+- Bruit mesuré au repos (2026-10-18, robot au repos) : angles ±0,003 rad,
+  accéléro ±0,2 m/s², gyro ±0,02 rad/s ; AngleY de repos -0,026 (pente du sol),
+  |acc| ≈ 8,96.
+- Référence : moyenne de 2 s au démarrage (et à chaque ré-armement). Pas
+  d'adaptation lente : un vol lent ne doit pas se fondre dans le décor.
+- Déclenchement (le premier qui arrive) :
+  - **inclinaison** > 8° (`--alarm-tilt`) par rapport à la référence, pendant 0,5 s ;
+  - **secousses** : écart de |acc| à la pesanteur > 2,5 m/s² sur ≥ 4 lectures en 1 s
+    (robot soulevé ou porté) ;
+  - **rotation** > 0,5 rad/s pendant 0,5 s (robot tourné ou traîné).
+- Alarme : coupe tout son en cours, **sirène en boucle** (`playFileInLoop`,
+  volume 100), yeux et épaules en **gyrophare rouge/bleu**. Le fantôme ne fait
+  plus rien (ni BOUH ni « Trick or treat ») tant que la sirène sonne.
+- **Désarmement** : `touch ~/halloween/desarme`. La sirène s'arrête, les LED
+  s'éteignent, nouvelle référence et ré-armement **30 s** plus tard (le temps de
+  remettre le robot en place). Un fichier `desarme` présent quand rien ne sonne
+  est simplement effacé.
+- Calibrage : après chaque BOUH, `run.log` donne les écarts max de la base
+  pendant le geste (« secousse du BOUH »). Avec `--alarm-debug`, il les donne
+  toutes les 10 s.
+- Simulation hors robot (`simu_antivol.py`) : rien au repos ni à 5°, sirène à
+  12°, en cas de secousses ±4 m/s² et de rotation 1 rad/s.
+- Limite : rien n'empêche d'éteindre le robot (bouton du torse) ou de
+  débrancher la batterie.
 
 ## Trouvailles importantes
 
@@ -229,9 +269,7 @@ Au lancement, il faut ~15 s avant « fantome en place » : c'est le `wakeUp()`.
    boot). Il faut remonter `/` en écriture pour poser le fichier. À activer
    seulement le soir d'Halloween ? (Le robot se lève devant tout le monde à
    chaque démarrage.)
-2. **Alarme anti-vol** : sirène de police continue si le vecteur pesanteur
-   change (escalier de 10 marches). Utiliser la centrale inertielle de la
-   **base**, car celle du torse est en panne. Détails dans `TODO.md`.
+2. **Alarme anti-vol** : codée, à **tester sur le robot** (plan dans `TODO.md`).
 3. Valider la chauffe sur **plusieurs heures** en attente, avec `temps.py`
    (à 23h42 : cou 36, hanches 52, genoux 50, hanches latérales 52 °C).
 4. Optionnel : mesurer le seuil exact de l'état 1 (relever `Status` en continu).
