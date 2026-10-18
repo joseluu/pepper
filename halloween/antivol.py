@@ -27,6 +27,7 @@ SHOCK_COUNT = 4      # ... sur au moins tant de lectures dans la derniere second
 GYRO_MAX = 0.5       # rad/s de rotation ...
 GYRO_HOLD = 0.5      # ... continue pendant tant de secondes
 REARM_DELAY = 30.0   # s apres desarmement avant de re-armer
+TEST_PAUSE = 3.0     # mode test (siren_max) : pause apres la sirene courte
 
 
 def _log(msg):
@@ -34,7 +35,8 @@ def _log(msg):
 
 
 class TheftAlarm(object):
-    def __init__(self, session, tilt_deg=8.0, volume=100, debug=False):
+    def __init__(self, session, tilt_deg=8.0, volume=100, debug=False,
+                 siren_max=0.0):
         self.mem = session.service("ALMemory")
         self.player = session.service("ALAudioPlayer")
         self.audio = session.service("ALAudioDevice")
@@ -42,6 +44,8 @@ class TheftAlarm(object):
         self.tilt = math.radians(tilt_deg)
         self.volume = volume
         self.debug = debug
+        self.siren_max = siren_max   # > 0 : sirene coupee seule apres tant de s (tests)
+        self.siren_t0 = 0.0
         self.active = False       # sirene en cours
         self.ref = None
         self.peaks = None         # ecarts max depuis le dernier reset_peaks()
@@ -73,6 +77,7 @@ class TheftAlarm(object):
         if self.active:
             return
         self.active = True
+        self.siren_t0 = time.time()
         _log("ALARME : %s" % reason)
         self.player.stopAll()
         self.audio.setOutputVolume(self.volume)
@@ -86,11 +91,11 @@ class TheftAlarm(object):
         while self.active and not self._stop:
             self.player.playFile(SIREN)
 
-    def stop_siren(self):
+    def stop_siren(self, why="desarmement"):
         self.active = False
         self.player.stopAll()
         self.leds.fadeRGB("AllLeds", 0x000000, 0.0)
-        _log("sirene arretee (desarmement)")
+        _log("sirene arretee (%s)" % why)
 
     # -- boucle de surveillance ---------------------------------------------
     def start(self):
@@ -125,6 +130,13 @@ class TheftAlarm(object):
                     self.calibrate()
                     tilt_since = gyro_since = None
                     shocks = []
+                elif self.siren_max and now - self.siren_t0 >= self.siren_max:
+                    # mode test : coupe seule, garde la reference d'origine
+                    self.stop_siren("mode test, %.1f s" % self.siren_max)
+                    time.sleep(TEST_PAUSE)
+                    tilt_since = gyro_since = None
+                    shocks = []
+                    continue
                 time.sleep(0.25)
                 continue
             if os.path.exists(DISARM_FILE):   # fichier oublie : sans effet

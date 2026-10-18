@@ -40,3 +40,18 @@ def lift(m, sl):
     m.v[4] = -8.96
 scenario("secousses (soulevé)", lift)
 scenario("rotation 1 rad/s", lambda m, sl: m.v.__setitem__(7, 1.0))
+
+# mode test : sirene coupee seule apres siren_max s, puis re-declenche si
+# toujours penche
+antivol.TEST_PAUSE = 0.1
+sess = Sess(); a = antivol.TheftAlarm(sess, siren_max=0.3)
+a.ref = (-0.005, -0.026, math.sqrt(0.26**2+0.09**2+8.96**2)); a.reset_peaks()
+import threading
+th = threading.Thread(target=a._run); th.daemon = True; th.start()
+sess.mem.v[1] = -0.026 + math.radians(12)
+time.sleep(0.2); on1 = a.active
+time.sleep(0.4); off = not a.active
+sess.mem.v[1] = -0.026
+time.sleep(0.6); a._stop = True
+print("%-32s -> sirene=%s puis coupee=%s, au repos=%s"
+      % ("mode test 0.3 s", on1, off, not a.active))

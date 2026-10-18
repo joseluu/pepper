@@ -11,7 +11,7 @@
 # Lancement sur le robot :
 #   PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 halloween.py
 # Options : --test (declenche une fois tout de suite), --volume N, --dist M,
-#   --no-alarm, --alarm-tilt DEG, --alarm-debug, --test-alarm (voir antivol.py)
+#   --no-alarm, --alarm-tilt DEG, --alarm-debug, --alarm-siren S, --test-alarm (voir antivol.py)
 import sys, os, time, math, argparse
 
 sys.stdout = sys.stderr  # qi ecrit ses [W] sur stdout
@@ -223,7 +223,8 @@ class Ghost(object):
             return
         if not self.args.no_alarm:
             self.alarm = antivol.TheftAlarm(self.session, self.args.alarm_tilt,
-                                            debug=self.args.alarm_debug)
+                                            debug=self.args.alarm_debug,
+                                            siren_max=self.args.alarm_siren)
             self.alarm.start()
         while True:
             if self.alarm_active():   # sirene : le fantome ne fait plus rien
@@ -257,6 +258,8 @@ def main():
                    help="inclinaison (deg) qui declenche la sirene")
     p.add_argument("--alarm-debug", action="store_true",
                    help="journalise les ecarts max de la centrale toutes les 10 s")
+    p.add_argument("--alarm-siren", type=float, default=0.0,
+                   help="tests : coupe la sirene apres tant de s (0 = continue)")
     p.add_argument("--test-alarm", action="store_true",
                    help="joue la sirene 5 s (gyrophare compris) et quitte")
     args = p.parse_args()
