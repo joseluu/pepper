@@ -8,7 +8,7 @@ la main : c'est la panne qui a fait disparaître les flèches PTZ dans Frigate l
 
 ## 1. Pourquoi ça arrive
 
-Les Pepper prennent leur adresse en **DHCP** sur le WiFi (réseau `le WiFi de la maison`).
+Les Pepper prennent leur adresse en **DHCP** sur le WiFi (réseau WiFi de la maison).
 Le bail DHCP n'est pas permanent : après une coupure, un reboot, une absence
 prolongée ou si un autre appareil prend l'adresse, **la box réattribue une IP
 différente**. Exemple vécu : `pepper` est passé de `192.168.11.182` à
@@ -63,7 +63,7 @@ ssh pepper 'ip -4 -o addr show wlan0 eth0 | awk "{print \$2, \$4}"'
 ssh pepper 'cat /sys/class/net/wlan0/address /sys/class/net/eth0/address'  # MAC
 
 # b) Vers quoi pointe le nom / l'alias ssh ?
-getent hosts pepper.<domaine-lan> 2>/dev/null || nslookup pepper.<domaine-lan>
+getent hosts pepper 2>/dev/null || nslookup pepper
 ssh -G pepper | grep -i hostname
 
 # c) Le robot est-il joignable sur ses ports depuis le LAN ?
@@ -78,7 +78,7 @@ done
 > ONVIF/RTSP depuis le conteneur :
 > ```bash
 > ssh tram 'docker exec frigate curl -s -m5 -o /dev/null -w "%{http_code}\n" \
->   http://pepper.<domaine-lan>:8000/onvif/device_service \
+>   http://pepper:8000/onvif/device_service \
 >   -H "Content-Type: application/soap+xml" \
 >   --data "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\"><s:Body><GetCapabilities xmlns=\"http://www.onvif.org/ver10/device/wsdl\"/></s:Body></s:Envelope>"'
 > ```
@@ -147,7 +147,7 @@ c'est-à-dire son **hostname système** (`pepper`, `memmer`). Vérifier ce nom s
 robot n'apparaît pas :
 ```bash
 ssh <robot> hostname           # doit valoir pepper / memmer
-dig +short @192.168.11.135 <robot>.<domaine-lan>     # doit renvoyer son IP courante
+dig +short @192.168.11.135 <robot>.<domaine-lan>  # doit renvoyer son IP courante
 ```
 > Un robot absent du DNS = très probablement **éteint / sans bail actif** (cas de
 > `memmer` quand son chargeur n'est pas branché), pas un défaut de config.
@@ -155,7 +155,7 @@ dig +short @192.168.11.135 <robot>.<domaine-lan>     # doit renvoyer son IP cour
 ### À faire une fois
 
 1. **Toujours adresser par nom**, jamais par IP :
-   - `~/.ssh/config` : `HostName <robot>.<domaine-lan>` (déjà fait pour `pepper` ;
+   - `~/.ssh/config` : `HostName <robot>` (nom court, complété par le domaine de recherche du DHCP) (déjà fait pour `pepper` ;
      **à faire pour `memmer`** qui est encore en `192.168.11.185`, et pour les
      alias `*_wired`).
    - Config Frigate : noms dans `rtsp://` et `onvif: host:`.
@@ -172,7 +172,7 @@ dig +short @192.168.11.135 <robot>.<domaine-lan>     # doit renvoyer son IP cour
 
 | Robot | Nom DNS | WiFi (`wlan0`) | Filaire (`eth0`) | MAC WiFi | MAC eth0 |
 |---|---|---|---|---|---|
-| **pepper** | `pepper.<domaine-lan>` | DHCP (était .182 → .228) | .183 (si câblé) | `48:a9:d2:a8:ed:0c` | `00:13:95:1d:eb:58` |
+| **pepper** | `pepper` | DHCP (était .182 → .228) | .183 (si câblé) | `48:a9:d2:a8:ed:0c` | `00:13:95:1d:eb:58` |
 | **memmer** | *(à créer)* | .185 (DHCP) | .190 (si câblé) | *(relever : `ssh memmer 'cat /sys/class/net/wlan0/address'`)* | *(idem eth0)* |
 
 > Récupérer la MAC d'un robot pour la réservation DHCP :

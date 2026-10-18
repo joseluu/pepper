@@ -39,7 +39,7 @@ Dans le dépôt (`halloween/`) et sur le robot (`/home/nao/halloween/`) :
 | `siren.wav` | Sirène de police « wail » synthétisée (6 s, boucle sans coupure) |
 | `make_siren.py` | Régénère `siren.wav` (Python 3, sur le PC) |
 | `simu_antivol.py` | Simulation hors robot de la détection anti-vol (Python 3) |
-| `web.py` | Page d'état sur http://pepper.<domaine-lan>:8080/ : lidar avant, batterie, état de l'alarme, bouton « Arrêter la sirène » (stdlib, pas de Flask sur le robot) |
+| `web.py` | Page d'état sur http://pepper:8080/ : lidar avant, batterie, état de l'alarme, bouton « Arrêter la sirène » (stdlib, pas de Flask sur le robot) |
 | `record_imu.py` | Enregistre centrale de la base + roues + pare-chocs en CSV (`python2 record_imu.py f.csv 180`, fantôme arrêté) |
 | `TODO.md` | Plan de test de l'alarme anti-vol |
 | `run.log` (robot seulement) | Journal du programme (détections, BOUH) |
@@ -203,7 +203,7 @@ ne redonne l'ordre ensuite. Probablement aussi la cause du « bras gauche lent �
 redescendre » noté plus tôt (pas un embrayage).
 
 - Autorisation (persistante, survit au reboot) : case « Permit deactivation of
-  the safety reflexes » dans http://pepper.<domaine-lan>/advanced/ (Settings),
+  the safety reflexes » dans http://pepper/advanced/ (Settings),
   cochée le 2026-10-18. Stockée dans `~/.config/naoqi/ALMotion.xml`
   (`ENABLE_DEACTIVATION_OF_FALL_MANAGER` = true).
 - Désactivation (non persistante, perdue au redémarrage de NAOqi) :
@@ -374,7 +374,7 @@ Points à vérifier au premier essai sur le robot :
 - **Tablette** : pas nécessaire. `ALTabletService` est absent (la tablette ne
   répondait déjà pas) ; elle est maintenant débranchée (prise USB, débranchée
   robot allumé sans problème). Avantage : pas d'écran qui luit sous le drap.
-- Sans le câble réseau : le WiFi seul fonctionne (`pepper.<domaine-lan>` →
+- Sans le câble réseau : le WiFi seul fonctionne (`pepper` →
   192.168.11.228 sur `wlan0`). Le câble donnait 192.168.11.183 (`eth0`).
 - Le capot d'alimentation était ouvert pendant les essais : seules les roues
   sont bloquées, ce qui ne gêne pas le fantôme.

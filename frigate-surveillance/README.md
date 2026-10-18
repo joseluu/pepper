@@ -147,7 +147,7 @@ scp onvif/onvif_ptz.py   pepper:/data/onvif/onvif_ptz.py
 > ONVIF bridge guards against this by **echoing back the `Host:` header the client
 > used** when it advertises its service URLs (so PTZ keeps working as long as
 > Frigate reaches the robot by a name that still resolves). Point Frigate's
-> `rtsp://…` and `onvif: host:` at a stable DNS name (e.g. `pepper.<domaine-lan>`),
+> `rtsp://…` and `onvif: host:` at a stable DNS name (e.g. the short name `pepper`, completed by the LAN DNS search domain),
 > and set a **DHCP reservation** on your router so the name keeps resolving. The
 > `ONVIF_HOST` env in `systemd/onvif-ptz.service` is only a fallback for clients
 > that send no `Host` header.

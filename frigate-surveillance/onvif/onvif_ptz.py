@@ -5,7 +5,7 @@
 #
 # Listens on :8000. Frigate camera config (use a DNS name, not a DHCP IP):
 #   onvif:
-#     host: pepper.<domaine-lan>
+#     host: pepper
 #     port: 8000
 #     user: ""        # auth is ignored
 #     password: ""
@@ -24,7 +24,7 @@ LISTEN_PORT = 8000
 # client actually used to reach us (see _req / do_POST), so PTZ keeps working
 # even if the robot's DHCP IP changes. ONVIF_HOST is only used if a request
 # carries no Host header.
-ADVERTISE_HOST = os.environ.get("ONVIF_HOST", "pepper.<domaine-lan>")
+ADVERTISE_HOST = os.environ.get("ONVIF_HOST", "pepper")
 
 # Per-request advertise host (the Host: header the client connected with),
 # stored thread-locally so XADDR() can build matching service URLs.

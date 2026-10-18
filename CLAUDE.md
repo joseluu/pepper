@@ -7,11 +7,14 @@ Both robots are the same model, same OS (NAOqiOS 3.3.10.1, NAOqi 2.7.1.128).
 SSH key auth is configured — no password needed for normal use.
 Use `ssh memmer`, `ssh pepper`, `ssh vigibot` directly (aliases configured in ~/.ssh/config).
 
-| Robot     | SSH alias        | WiFi IP          | Ethernet IP      |
-|-----------|------------------|------------------|------------------|
-| pepper    | `ssh pepper`     | 192.168.11.182   | 192.168.11.183   |
-| memmer    | `ssh memmer`   | 192.168.11.185   | 192.168.11.190   |
-| vigibot   | `ssh vigibot`    | —                | —                |
+| Robot     | SSH alias        | Host name (LAN DNS) | Ethernet IP      |
+|-----------|------------------|---------------------|------------------|
+| pepper    | `ssh pepper`     | `pepper`            | 192.168.11.183   |
+| memmer    | `ssh memmer`     | `memmer`            | 192.168.11.190   |
+| vigibot   | `ssh vigibot`    | —                   | —                |
+
+WiFi addresses come from DHCP and can change: always use the short host names
+(the LAN DNS updates them, see `IP_CHANGE_RUNBOOK.md`).
 
 - User: `nao` — key: `~/.ssh/nao`
 - Wired aliases: `ssh pepper_wired`, `ssh memmer_wired`
@@ -91,7 +94,7 @@ Available modules in `/opt/aldebaran/lib/python2.7/site-packages/`:
 
 ## WiFi
 
-Both robots connect to **le WiFi de la maison** (PSK, DHCP). WiFi service ID (pepper): `wifi_48a9d2a8ed0c_<SSID in hex>_managed_psk`
+Both robots connect to the home WiFi network (PSK, DHCP). Its name and passphrase are in the private global `~/.claude/CLAUDE.md`, never in this public repo. WiFi service ID (pepper): `wifi_48a9d2a8ed0c_<SSID in hex>_managed_psk` (`connmanctl services` on the robot).
 
 ### Connect to WiFi (no root needed)
 
@@ -174,8 +177,8 @@ Deploy package: `python35_pepper_deploy.tar.gz` (45 MB, works on any Pepper 2.7.
 
 | Robot  | Main UI                       | Advanced UI                          |
 |--------|-------------------------------|--------------------------------------|
-| pepper | `http://192.168.11.182/`      | `http://192.168.11.182/advanced/`    |
-| memmer | `http://192.168.11.185/`      | `http://192.168.11.185/advanced/`    |
+| pepper | `http://pepper/`              | `http://pepper/advanced/`            |
+| memmer | `http://memmer/`              | `http://memmer/advanced/`            |
 
 AngularJS app, nginx 1.8.1.
 

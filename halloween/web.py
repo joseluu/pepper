@@ -3,7 +3,7 @@
 # Bibliotheque standard seulement (pas de Flask sur le robot).
 #
 # Lancer (sur le robot) : python2 web.py [--port 8080]
-# Puis ouvrir http://pepper.<domaine-lan>:8080/
+# Puis ouvrir http://pepper:8080/
 #
 # Etat lu dans ALMemory : Halloween/Ghost (battement de halloween.py),
 # Halloween/LastScare, Halloween/Alarm (antivol.py). Le bouton d'arret cree
@@ -231,7 +231,7 @@ def main():
     args = p.parse_args()
     Handler.state = State(args.dist)
     srv = Server(("", args.port), Handler)
-    os.write(2, "%s [web] http://pepper.<domaine-lan>:%d/\n"
+    os.write(2, "%s [web] http://pepper:%d/\n"
              % (time.strftime("%H:%M:%S"), args.port))
     srv.serve_forever()
 
