@@ -13,6 +13,11 @@
 # (et WHEEL_GRACE s apres), rien ne declenche. Porte dans l'escalier, le robot
 # ne touche plus le sol : roues immobiles.
 #
+# Porte (meme "a plat") : mesure 2026-10-18, roues a 0 sauf a la prise et a
+# la pose, mais rotation 3 axes 0.5 a 1.7 rad/s pendant tout le portage et
+# inclinaison 6 a 12 deg. Au sol, le robot ne peut pas tourner sans que ses
+# roues tournent : rotation sans roues = porte.
+#
 # Desarmer : ssh pepper 'touch ~/halloween/desarme'  (la sirene s'arrete,
 # l'alarme se re-arme 30 s plus tard avec une nouvelle reference)
 import os, time, math, threading
@@ -36,6 +41,8 @@ GYRO_MAX = 0.5       # rad/s de rotation ...
 GYRO_HOLD = 0.5      # ... continue pendant tant de secondes
 WHEEL_MIN = 0.5      # vitesse de roue (|.|) : le robot roule au sol ...
 WHEEL_GRACE = 2.0    # ... et pendant tant de s apres, rien ne declenche
+AIR_GYRO = 0.4       # rotation 3 axes moyenne (rad/s) sur AIR_HOLD s ...
+AIR_HOLD = 1.0       # ... roues immobiles tout ce temps : il est porte
 REARM_DELAY = 30.0   # s apres desarmement avant de re-armer
 TEST_PAUSE = 3.0     # mode test (siren_max) : pause apres la sirene courte
 
@@ -68,14 +75,15 @@ class TheftAlarm(object):
         acc = math.sqrt(v[2] ** 2 + v[3] ** 2 + v[4] ** 2)
         # gyro X/Y seulement (basculement) : rouler et pivoter au sol (Z) est permis
         gyro = math.sqrt(v[5] ** 2 + v[6] ** 2)
+        gyro3 = math.sqrt(v[5] ** 2 + v[6] ** 2 + v[7] ** 2)
         wheel = max(abs(v[8]), abs(v[9]), abs(v[10]))
-        return v[0], v[1], acc, gyro, wheel
+        return v[0], v[1], acc, gyro, wheel, gyro3
 
     def calibrate(self, seconds=2.0):
         n, sx, sy, sa = 0, 0.0, 0.0, 0.0
         t_end = time.time() + seconds
         while time.time() < t_end:
-            ax, ay, acc, _, _ = self.read()
+            ax, ay, acc = self.read()[:3]
             n += 1; sx += ax; sy += ay; sa += acc
             time.sleep(1.0 / RATE)
         self.ref = (sx / n, sy / n, sa / n)
@@ -116,8 +124,9 @@ class TheftAlarm(object):
         self._thread = threading.Thread(target=self._run)
         self._thread.daemon = True
         self._thread.start()
-        _log("armee (inclinaison %.0f deg, choc %.1f m/s2, rotation %.1f rad/s)"
-             % (math.degrees(self.tilt), SHOCK_ACC, GYRO_MAX))
+        _log("armee (inclinaison %.0f deg, choc %.1f m/s2, rotation %.1f rad/s, "
+             "porte %.1f rad/s sans roues)"
+             % (math.degrees(self.tilt), SHOCK_ACC, GYRO_MAX, AIR_GYRO))
 
     def stop(self):
         self._stop = True
@@ -125,6 +134,7 @@ class TheftAlarm(object):
     def _run(self):
         tilt_since = gyro_since = None
         shocks = []          # instants des lectures "choc"
+        air = []             # (instant, rotation 3 axes, roues) sur AIR_HOLD s
         rolled = 0.0         # dernier instant ou les roues tournaient
         last_debug = time.time()
         flash = False
@@ -154,7 +164,7 @@ class TheftAlarm(object):
                 continue
             if os.path.exists(DISARM_FILE):   # fichier oublie : sans effet
                 os.remove(DISARM_FILE)
-            ax, ay, acc, gyro, wheel = self.read()
+            ax, ay, acc, gyro, wheel, gyro3 = self.read()
             tilt = max(abs(ax - self.ref[0]), abs(ay - self.ref[1]))
             dacc = abs(acc - self.ref[2])
             p = self.peaks
@@ -162,6 +172,16 @@ class TheftAlarm(object):
             p[3] = max(p[3], wheel)
             if wheel > WHEEL_MIN:
                 rolled = now
+            # la rotation oscille au rythme des pas : moyenne sur la fenetre
+            air.append((now, gyro3, wheel))
+            air = [a for a in air if now - a[0] <= AIR_HOLD]
+            mean = sum(a[1] for a in air) / len(air)
+            if (now - air[0][0] >= 0.9 * AIR_HOLD and mean > AIR_GYRO
+                    and max(a[2] for a in air) < WHEEL_MIN):
+                self.start_siren("rotation %.2f rad/s sans les roues (porte)" % mean)
+                air = []
+                time.sleep(1.0 / RATE)
+                continue
             if now - rolled < WHEEL_GRACE:   # au sol, on le fait rouler
                 tilt_since = gyro_since = None
                 shocks = []

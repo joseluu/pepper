@@ -15,7 +15,7 @@ out = open(sys.argv[1], "w")
 out.write("t,angx,angy,accx,accy,accz,gyrx,gyry,gyrz,wfl,wfr,wb,bfl,bfr,bb\n")
 t0 = time.time()
 while time.time() - t0 < float(sys.argv[2]):
-    v = mem.getListData(antivol.KEYS + EXTRA)
+    v = mem.getListData(antivol.KEYS[:8] + EXTRA)
     out.write("%.2f,%s\n" % (time.time() - t0, ",".join("%.4f" % x for x in v)))
     time.sleep(0.05)
 out.close()
