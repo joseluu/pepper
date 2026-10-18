@@ -112,6 +112,17 @@ class Ghost(object):
                 ba.setEnabled(False)
         except Exception as e:
             log("ALBasicAwareness: %s" % e)
+        # anti-collision des bras : fige un bras si quelqu'un est tout pres
+        # (bras gauche reste leve apres un BOUH). Desactivable seulement si
+        # "Permit deactivation of the safety reflexes" est coche dans
+        # http://pepper/advanced/ (Settings) ; sinon refus silencieux.
+        try:
+            if self.motion.getExternalCollisionProtectionEnabled("Arms"):
+                self.motion.setExternalCollisionProtectionEnabled("Arms", False)
+                if self.motion.getExternalCollisionProtectionEnabled("Arms"):
+                    log("anti-collision des bras toujours active (non autorise)")
+        except Exception as e:
+            log("anti-collision bras: %s" % e)
 
     def leds_off(self):
         self.leds.fadeRGB("AllLeds", 0x000000, 0.3)

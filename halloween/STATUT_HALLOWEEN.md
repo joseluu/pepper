@@ -175,6 +175,26 @@ Testée sur le robot le 2026-10-18. Elle démarre avec le fantôme, sauf `--no-a
 - Limite : rien n'empêche d'éteindre le robot (bouton du torse) ou de
   débrancher la batterie.
 
+## Anti-collision des bras (désactivé)
+
+Le 2026-10-18, le bras gauche est resté levé après un BOUH : consigne figée à
+0,37 rad au lieu de 1,12, `Motion/ExternalCollision/ClippingAmplitude/LArm` =
+8,96, `ALMotion/MoveFailed` = « Internal stop ». La protection anti-collision
+externe des bras avait vu quelqu'un tout près et annulé le mouvement ; personne
+ne redonne l'ordre ensuite. Probablement aussi la cause du « bras gauche lent à
+redescendre » noté plus tôt (pas un embrayage).
+
+- Autorisation (persistante, survit au reboot) : case « Permit deactivation of
+  the safety reflexes » dans http://pepper.<domaine-lan>/advanced/ (Settings),
+  cochée le 2026-10-18. Stockée dans `~/.config/naoqi/ALMotion.xml`
+  (`ENABLE_DEACTIVATION_OF_FALL_MANAGER` = true).
+- Désactivation (non persistante, perdue au redémarrage de NAOqi) :
+  `halloween.py` appelle `setExternalCollisionProtectionEnabled("Arms", False)`
+  au démarrage et toutes les 30 s (`quiet_autonomy`). Sans l'autorisation,
+  NAOqi refuse sans erreur ; le journal l'indique.
+- Conséquence : les bras ne s'arrêtent plus si quelqu'un est tout près pendant
+  le BOUH. La protection des déplacements (« Move ») reste active.
+
 ## Trouvailles importantes
 
 ### Chauffe des moteurs (le point le plus critique)
