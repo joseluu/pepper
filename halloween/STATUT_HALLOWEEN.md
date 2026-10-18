@@ -213,6 +213,98 @@ redescendre » noté plus tôt (pas un embrayage).
 - Conséquence : les bras ne s'arrêtent plus si quelqu'un est tout près pendant
   le BOUH. La protection des déplacements (« Move ») reste active.
 
+## Dialogue avec les enfants (`../dialogue/`) — prêt, pas encore testé sur le robot
+
+But : parler avec les enfants. Le micro USB écoute, la transcription passe le
+texte au LLM, la synthèse vocale répond. Les micros internes du robot ne
+marchent pas.
+
+**Micro USB** : ReSpeaker Mic Array de Seeed (USB `2886:0007`, carte ALSA
+`UAC20`). Il enregistre en 16 kHz stéréo S24_3LE ; les 2 canaux sont identiques
+(son déjà traité par le réseau de micros). Il devient la carte n°0 mais ne gêne
+pas le son : PulseAudio garde `speaker` comme sortie par défaut, et la voix du
+robot sort bien sur ses haut-parleurs (vérifié le 2026-10-18). Son
+**interrupteur de capture est coupé au démarrage** :
+`amixer -c UAC20 cset numid=7 on,on` et `numid=8 on`. `robot_audio.py` le
+remet à chaque lancement. Niveaux mesurés près du robot : bruit de fond
+(ventilateurs) vers -34 dBFS, voix vers -25 dBFS.
+
+**Répartition** : le robot ne fait qu'écouter et parler, tout le reste tourne
+sur le PC. Sur le robot, Python 2.7/3.5 et OpenSSL 1.0.2 ne permettent pas la
+transcription en temps réel de Google, et l'Atom est trop faible pour faire
+tourner un modèle en local. **C'est le PC qui se connecte au robot**, car sous
+WSL le robot ne peut pas joindre le PC.
+
+- `robot_audio.py` (sur le robot, Python 2) est un serveur TCP sur le port 8090.
+  - Il envoie le son du micro en PCM 16 bits mono 16 kHz
+    (`arecord -D plughw:UAC20,0`).
+  - Il reçoit des messages encadrés (longueur + en-tête JSON + données) :
+    `play` (un WAV, joué par `ALAudioPlayer.playFile`), `eyes` (couleur des
+    yeux) et `stop`.
+  - Pendant qu'il parle, et 0,4 s après, il envoie du silence pour ne pas
+    s'entendre lui-même.
+- `dialogue.py` (sur le PC, projet uv avec `pyproject.toml`) enchaîne les trois
+  services Google sur le projet GCP `m2if-270422` :
+  1. **Transcription** : Speech-to-Text v2 en continu, modèle `chirp_3`, région
+     `eu`, fr-FR. Ce modèle **coupe les phrases aux pauses** et ne donne pas de
+     résultat partiel. La fin de phrase est donc décidée avec la détection de
+     parole de Google (`enable_voice_activity_events`) : on attend que la parole
+     soit finie, qu'au moins un morceau soit final, et 0,4 s sans rien de
+     nouveau. Les morceaux finaux sont alors regroupés.
+     - Comparé sur le même fichier : `chirp_2` coupe de la même façon ;
+       `latest_long` ne valide qu'à la fin du flux ; `latest_short` s'arrête
+       après la première phrase.
+  2. **LLM** : `gemini-2.5-flash` sur Vertex AI, **réflexion désactivée**
+     (`thinking_budget=0`). Il répond en 0,5 à 1,7 s ; avec la réflexion il
+     mettait 14 s. `gemini-3-flash-preview` met 2,4 à 4,4 s. Le texte de
+     départ (`SYSTEM` dans le code) l'oblige à faire des phrases courtes et
+     simples pour des enfants de 4 à 10 ans, sans emoji, sans demander
+     d'informations personnelles, et à éviter les sujets effrayants. La
+     conversation garde l'historique.
+  3. **Voix** : Text-to-Speech `fr-FR-Chirp3-HD-Leda`, en LINEAR16 24 kHz,
+     prête en environ 0,8 s. La voix du robot ne parle pas français :
+     seuls `English` et `Chinese` sont installés.
+- **Yeux** : bleus quand Pepper écoute, orange quand il réfléchit.
+- **Journal** des conversations : `dialogue/logs/AAAAMMJJ-HHMMSS.txt` (non
+  commité, comme `out/`).
+
+**Testé sur le PC seulement** (`--file`, avec un WAV généré par la synthèse
+vocale qui joue un enfant). La phrase « Tu as peur… des sorcières » n'est plus
+coupée en deux, l'historique est gardé, et les WAV de réponse sont valides.
+**Délai entre la fin de la phrase et le début de la réponse : environ 3 s**,
+soit 1,3 s de transcription, 0,6 à 1,7 s de LLM et 0,8 s de voix.
+
+**Pas encore fait** : aucun test sur le robot. L'utilisateur a demandé
+d'attendre, et `robot_audio.py` n'est **pas copié** sur le robot (sa syntaxe
+Python 2 n'a pas été vérifiée, il n'y a pas de Python 2 sur le PC).
+
+Mise en route :
+```bash
+# Identifiants Google, une fois (déjà fait le 2026-10-18) :
+#   gcloud auth application-default login
+# API activées : speech.googleapis.com, texttospeech.googleapis.com, aiplatform
+scp ../dialogue/robot_audio.py pepper:~/halloween/
+timeout 10 ssh pepper 'cd ~/halloween && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages \
+  setsid nohup python2 robot_audio.py > audio.log 2>&1 < /dev/null &'
+cd ../dialogue && uv run dialogue.py              # Ctrl+C pour arrêter
+uv run dialogue.py --file question.wav            # test sans robot (WAV 16 kHz mono)
+uv run dialogue.py --voice fr-FR-Chirp3-HD-Puck   # autre voix (42 voix fr-FR)
+```
+
+Points à vérifier au premier essai sur le robot :
+- `ALAudioPlayer.playFile` lit-il le WAV 24 kHz, et à quel volume ?
+- Le silence envoyé pendant que Pepper parle suffit-il à ce qu'il ne s'entende
+  pas ? (Le micro est dans le robot, près des haut-parleurs.)
+- Avec l'autonomie (`ALAutonomousLife`) en `interactive`, le robot bouge et
+  peut parler de lui-même. La couper pendant le dialogue, comme le fait
+  `halloween.py` ?
+- Distance de captation avec des enfants et du bruit autour. Pepper répond à
+  tout ce qu'il entend (télé, adultes) : ajouter éventuellement un mot de réveil
+  (« Pepper »).
+- Coût : la transcription est facturée sur tout le son envoyé, silences compris
+  (environ 1 €/heure en continu). Ajouter éventuellement un filtre de niveau
+  sonore côté PC si le dialogue doit tourner longtemps.
+
 ## Trouvailles importantes
 
 ### Chauffe des moteurs (le point le plus critique)
@@ -302,9 +394,10 @@ redescendre » noté plus tôt (pas un embrayage).
   Future (`.wait()`).
 - `qi` écrit ses avertissements `[W] ... sdklayout` / `transportsocketcache`
   sur stdout : ils sont sans importance, il suffit de les filtrer.
-- **Boot de ~8 min** : la carte du torse ne répond pas au démarrage, donc
-  `firmware-update.sh` reflashe tout (avec le même firmware) à chaque boot.
-  NAOqi ne démarre qu'après. Ne pas couper pendant ce temps. Voir `../STATUT.md`.
+- **Boot de ~8 min** (corrigé le 2026-10-18) : la carte du torse ne répond pas
+  au démarrage, donc `firmware-update.sh` reflashait tout à chaque boot. La
+  ligne fautive est commentée : le boot prend maintenant ~70 s à chaud et
+  ~2 min 25 s à froid. Voir `../STATUT.md`.
 
 ## Ce qui a été changé sur le robot pendant ce projet
 
@@ -328,3 +421,6 @@ redescendre » noté plus tôt (pas un embrayage).
 3. Valider la chauffe sur **plusieurs heures** en attente, avec `temps.py`
    (à 23h42 : cou 36, hanches 52, genoux 50, hanches latérales 52 °C).
 4. Optionnel : mesurer le seuil exact de l'état 1 (relever `Status` en continu).
+5. **Dialogue** : premier essai sur le robot (voir la section « Dialogue avec
+   les enfants » et ses points à vérifier). La page web (port 8080) et le
+   fantôme ne sont pas relancés depuis le redémarrage du 2026-10-18 au soir.

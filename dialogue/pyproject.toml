@@ -1,0 +1,9 @@
+[project]
+name = "dialogue"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "google-cloud-speech>=2.41.0",
+    "google-cloud-texttospeech>=2.38.0",
+    "google-genai>=2.31.0",
+]
