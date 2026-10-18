@@ -237,12 +237,17 @@ class Ghost(object):
                                             debug=self.args.alarm_debug,
                                             siren_max=self.args.alarm_siren)
             self.alarm.start()
+        self.last_beat = 0
         while True:
             if self.alarm_active():   # sirene : le fantome ne fait plus rien
+                self.mem.insertData("Halloween/Ghost", int(time.time()))
                 time.sleep(0.5)
                 self.baseline = None
                 continue
             now = time.time()
+            if now - self.last_beat > 1:   # lu par web.py
+                self.last_beat = now
+                self.mem.insertData("Halloween/Ghost", int(now))
             if now - self.last_check > 30:
                 self.last_check = now
                 self.quiet_autonomy()  # le timer keepawake les reactive
@@ -251,6 +256,7 @@ class Ghost(object):
                     log("robot passe au repos, je le reveille")
                     self.go_rest()
             if self.detect():
+                self.mem.insertData("Halloween/LastScare", int(time.time()))
                 self.scare()
             else:
                 self.wiggle_fingers()

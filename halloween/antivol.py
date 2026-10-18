@@ -98,6 +98,7 @@ class TheftAlarm(object):
             return
         self.active = True
         self.siren_t0 = time.time()
+        self._state("sirene", reason)
         _log("ALARME : %s" % reason)
         self.player.stopAll()
         self.audio.setOutputVolume(self.volume)
@@ -111,8 +112,16 @@ class TheftAlarm(object):
         while self.active and not self._stop:
             self.player.playFile(SIREN)
 
+    def _state(self, state, detail=""):
+        # lu par web.py (page d'etat)
+        try:
+            self.mem.insertData("Halloween/Alarm", [state, detail, int(time.time())])
+        except Exception:
+            pass
+
     def stop_siren(self, why="desarmement"):
         self.active = False
+        self._state("rearmement" if why == "desarmement" else "armee", why)
         self.player.stopAll()
         self.leds.fadeRGB("AllLeds", 0x000000, 0.0)
         _log("sirene arretee (%s)" % why)
@@ -124,6 +133,7 @@ class TheftAlarm(object):
         self._thread = threading.Thread(target=self._run)
         self._thread.daemon = True
         self._thread.start()
+        self._state("armee")
         _log("armee (inclinaison %.0f deg, choc %.1f m/s2, rotation %.1f rad/s, "
              "porte %.1f rad/s sans roues)"
              % (math.degrees(self.tilt), SHOCK_ACC, GYRO_MAX, AIR_GYRO))
@@ -151,6 +161,7 @@ class TheftAlarm(object):
                     _log("re-armement dans %.0f s" % REARM_DELAY)
                     time.sleep(REARM_DELAY)
                     self.calibrate()
+                    self._state("armee")
                     tilt_since = gyro_since = None
                     shocks = []
                 elif self.siren_max and now - self.siren_t0 >= self.siren_max:

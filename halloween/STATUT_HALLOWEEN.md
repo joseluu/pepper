@@ -39,6 +39,7 @@ Dans le dépôt (`halloween/`) et sur le robot (`/home/nao/halloween/`) :
 | `siren.wav` | Sirène de police « wail » synthétisée (6 s, boucle sans coupure) |
 | `make_siren.py` | Régénère `siren.wav` (Python 3, sur le PC) |
 | `simu_antivol.py` | Simulation hors robot de la détection anti-vol (Python 3) |
+| `web.py` | Page d'état sur http://pepper.<domaine-lan>:8080/ : lidar avant, batterie, état de l'alarme, bouton « Arrêter la sirène » (stdlib, pas de Flask sur le robot) |
 | `record_imu.py` | Enregistre centrale de la base + roues + pare-chocs en CSV (`python2 record_imu.py f.csv 180`, fantôme arrêté) |
 | `TODO.md` | Plan de test de l'alarme anti-vol |
 | `run.log` (robot seulement) | Journal du programme (détections, BOUH) |
@@ -174,6 +175,23 @@ Testée sur le robot le 2026-10-18. Elle démarre avec le fantôme, sauf `--no-a
   ou en roulant ; sirène à 12°, en cas de secousses, de basculement.
 - Limite : rien n'empêche d'éteindre le robot (bouton du torse) ou de
   débrancher la batterie.
+
+## Page web d'état (`web.py`)
+
+Processus séparé, à lancer en plus du fantôme :
+
+```sh
+ssh pepper 'cd ~/halloween && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages setsid nohup python2 web.py > web.log 2>&1 < /dev/null &'
+```
+
+- `/` : page (rafraîchie chaque seconde), `/status` : JSON, `POST /disarm` :
+  crée `~/halloween/desarme` (arrête la sirène si elle sonne, sinon sans effet).
+- État partagé par ALMemory : `Halloween/Ghost` (battement chaque seconde de
+  `halloween.py`), `Halloween/LastScare`, `Halloween/Alarm` = [état, détail,
+  instant] écrit par `antivol.py`. **Stocker les instants en entiers** :
+  ALMemory garde les flottants en 32 bits (un `time.time()` y perd ~2 min).
+- Lidar : segment 1 = gauche du robot (Y > 0), 15 = droite ; la page les
+  affiche du point de vue du robot.
 
 ## Anti-collision des bras (désactivé)
 
