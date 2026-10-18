@@ -41,8 +41,10 @@ recopier, remonter en ro).
 
 Mesure après correctif (2026-10-18, redémarrage logiciel `ALSystem.reboot()`) :
 NAOqi prêt en **~70 s**. Au redémarrage à chaud, la chestboard répond tout de
-suite (pas de coupure d'alimentation). Reste à mesurer un démarrage à froid
-(bouton), où la chestboard doit être reflashée seule.
+suite (pas de coupure d'alimentation). Démarrage à froid (extinction + bouton) :
+la chestboard est NACK puis reflashée seule (« Chestboard flashing status: 1 »),
+pas de reflash complet ; NAOqi prêt **~2 min 25 s** après l'extinction (temps
+d'appui sur le bouton compris). Correctif validé.
 
 ## OK (version embarquée = fichier)
 
