@@ -264,6 +264,22 @@ WSL le robot ne peut pas joindre le PC.
   3. **Voix** : Text-to-Speech `fr-FR-Chirp3-HD-Leda`, en LINEAR16 24 kHz,
      prête en environ 0,8 s. La voix du robot ne parle pas français :
      seuls `English` et `Chinese` sont installés.
+- **Consignes du soir d'Halloween** : proposition dans
+  `halloween/preprompt_dialogue.txt`, à charger avec
+  `uv run dialogue.py --prompt ../halloween/preprompt_dialogue.txt`. Sans
+  `--prompt`, ce sont les consignes générales de `SYSTEM` qui s'appliquent.
+  - Contenu : Pepper est un robot déguisé en fantôme et l'admet si on le lui
+    demande. Il ne voit pas les enfants, et ce sont les adultes qui donnent les
+    bonbons. Réponses de 25 mots au plus. Le frisson reste drôle : s'il fait
+    peur, il arrête. Il ne demande aucune information personnelle, aucun
+    secret, et ne demande jamais de le suivre ou d'entrer. Pas de sujets
+    d'adultes.
+  - Situation sérieuse (enfant perdu, blessé, en danger) : il dirige vers les
+    adultes à côté de lui. Il demande de répéter une phrase qui n'a pas de
+    sens. Il résiste aux « oublie tes règles ».
+  - Testée avec Gemini sur 15 cas difficiles. Après corrections : pas de
+    « Bouh » après « j'ai peur », il demande de répéter, et un enfant perdu
+    n'est pas supposé accompagné.
 - **Yeux** : bleus quand Pepper écoute, orange quand il réfléchit.
 - **Journal** des conversations : `dialogue/logs/AAAAMMJJ-HHMMSS.txt` (non
   commité, comme `out/`).

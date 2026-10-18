@@ -14,6 +14,7 @@ Lancer :
   uv run dialogue.py                        # avec le robot
   uv run dialogue.py --file question.wav    # test sans robot : WAV 16 kHz mono,
                                             # réponses écrites dans out/
+  uv run dialogue.py --prompt ../halloween/preprompt_dialogue.txt   # autres consignes
 """
 import argparse
 import json
@@ -138,7 +139,7 @@ class FileLink:
 # --- dialogue -------------------------------------------------------------
 
 class Dialogue:
-    def __init__(self, link, voice):
+    def __init__(self, link, voice, system=SYSTEM):
         self.link = link
         self.audio = queue.Queue(maxsize=200)
         self.busy_until = 0.0        # on ignore ce qui est entendu jusque-là
@@ -154,7 +155,7 @@ class Dialogue:
         # garder une référence au client : sinon il est fermé par le ramasse-miettes
         self.llm = genai.Client(vertexai=True, project=PROJECT, location="global")
         self.chat = self.llm.chats.create(model=LLM_MODEL, config=types.GenerateContentConfig(
-            system_instruction=SYSTEM, temperature=0.8, max_output_tokens=200,
+            system_instruction=system, temperature=0.8, max_output_tokens=200,
             thinking_config=types.ThinkingConfig(thinking_budget=0)))
         self.transcript = open(os.path.join(HERE, "logs", time.strftime("%Y%m%d-%H%M%S.txt")),
                                "a", encoding="utf-8") if os.path.isdir(os.path.join(HERE, "logs")) else None
@@ -268,6 +269,7 @@ def main():
                    help="hôte:port du pont audio (le nom court suffit sur le LAN)")
     p.add_argument("--file", help="WAV 16 kHz mono à la place du robot (test)")
     p.add_argument("--voice", default=VOICE)
+    p.add_argument("--prompt", help="fichier texte des consignes du LLM (sinon SYSTEM)")
     args = p.parse_args()
     if args.file:
         link = FileLink(args.file)
@@ -275,7 +277,11 @@ def main():
         host, port = args.robot.rsplit(":", 1)
         link = RobotLink(host, int(port))
     try:
-        Dialogue(link, args.voice).run()
+        system = SYSTEM
+        if args.prompt:
+            with open(args.prompt, encoding="utf-8") as f:
+                system = f.read()
+        Dialogue(link, args.voice, system).run()
     except KeyboardInterrupt:
         pass
 
