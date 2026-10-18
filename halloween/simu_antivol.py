@@ -7,7 +7,7 @@ antivol._log = lambda m: print("   log:", m)
 antivol.RATE = 200.0; antivol.TILT_HOLD = 0.05; antivol.GYRO_HOLD = 0.05
 
 class Mem:
-    def __init__(s): s.v = [-0.005, -0.026, -0.26, -0.09, -8.96, 0, 0, 0]
+    def __init__(s): s.v = [-0.005, -0.026, -0.26, -0.09, -8.96, 0, 0, 0, 0, 0, 0]
     def getListData(s, k): return list(s.v)
 class Svc:
     def __getattr__(s, n): return lambda *a, **k: None
@@ -39,7 +39,14 @@ def lift(m, sl):
         m.v[4] = -8.96 - (4 if i % 2 else -4); sl(0.01)
     m.v[4] = -8.96
 scenario("secousses (soulevé)", lift)
-scenario("rotation 1 rad/s", lambda m, sl: m.v.__setitem__(7, 1.0))
+scenario("pivote sur place 1 rad/s (Z)", lambda m, sl: m.v.__setitem__(7, 1.0))
+scenario("bascule 1 rad/s (X)", lambda m, sl: m.v.__setitem__(5, 1.0))
+def roll(m, sl):   # seuil de porte : roues qui tournent + inclinaison + chocs
+    m.v[8] = 4.0; m.v[1] = -0.026 + math.radians(12)
+    for i in range(10):
+        m.v[4] = -8.96 - (5 if i % 2 else -5); sl(0.01)
+    m.v[4] = -8.96
+scenario("roule au sol (seuil, chocs)", roll)
 
 # mode test : sirene coupee seule apres siren_max s, puis re-declenche si
 # toujours penche
