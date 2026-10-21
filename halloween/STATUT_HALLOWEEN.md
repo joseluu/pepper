@@ -321,6 +321,59 @@ Points à vérifier au premier essai sur le robot :
   (environ 1 €/heure en continu). Ajouter éventuellement un filtre de niveau
   sonore côté PC si le dialogue doit tourner longtemps.
 
+### Gemini Live (`dialogue/live.py`) — retenu, validé sur le PC le 2026-10-21
+
+**La chaîne STT → LLM → TTS a été jugée trop lente à l'essai réel** (micro et
+haut-parleurs du PC) : environ 3 s de latence. **Gemini Live** la remplace : un
+seul modèle reçoit la voix et répond en voix.
+- Modèle : `gemini-live-2.5-flash-native-audio`, sur Vertex AI, région
+  **europe-west4** (premier son 1,65 s, connexion comprise). Il n'existe ni dans
+  `global` ni sous `gemini-live-2.5-flash`.
+- Le son du micro (PCM 16 kHz) est envoyé en continu. Gemini détecte lui-même
+  la fin de la phrase (`END_SENSITIVITY_HIGH`, 500 ms de silence) et renvoie de
+  la voix PCM 24 kHz, avec les transcriptions des deux côtés (journal
+  `dialogue/logs/live-*.txt`).
+- **Latence mesurée : 0,5 à 1,8 s** entre la fin de la voix et le début de la
+  réponse. Jugé « bien mieux » et « fonctionne très bien » par l'utilisateur.
+- Pepper parle en premier (consigne `HELLO`). Les consignes viennent par défaut
+  de `halloween/preprompt_dialogue.txt` (`--prompt` pour en changer). Voix
+  `Leda` par défaut (`--voice`).
+- Le micro est remplacé par du silence pendant que Pepper parle, puis 0,4 s
+  après : sinon il s'entend dans ses haut-parleurs et se coupe lui-même.
+  `--barge-in` désactive ce silence (avec un casque, l'enfant peut alors couper
+  la parole à Pepper).
+- Gemini envoie le son **~3,7 fois plus vite que le temps réel** (11 s d'audio
+  en 3 s, jamais en retard). Il faut donc une **file de lecture** côté sortie :
+  la carte son la vide à son rythme.
+
+**Son sous WSL : à éviter.** La sortie PulseAudio de WSLg (via ffmpeg) **hache
+de plus en plus** au fil de la conversation, et des lecteurs ffmpeg finissent
+bloqués (`kill` sans effet, il faut `kill -9`). Le micro WSLg marche, mais
+ffmpeg y signale des horodatages non monotones. `live.py` tourne donc **sous
+Windows** : Python et son Windows via `sounddevice` (PortAudio), lancé depuis
+WSL par `dialogue/live_windows.sh`.
+- `uv.exe` côté Windows, avec les dépendances déclarées dans l'en-tête du script
+  (`uv run --script`).
+- Les identifiants Google de WSL sont passés par `WSLENV`
+  (`GOOGLE_APPLICATION_CREDENTIALS/p`).
+- `./live_windows.sh --list` liste les périphériques son ; `--mic N` et
+  `--out N` en choisissent un.
+- Piège : `| tr -d '\r'` retient la sortie (pas d'affichage en direct).
+
+`dialogue.py` (STT → LLM → TTS) reste dans le dépôt comme alternative (plus de
+contrôle sur le texte, mais plus lent). Il a aussi reçu un mode `--local` (son
+du PC via WSLg, qui hache) et l'accueil au démarrage.
+
+**Pour le robot (prochaine étape)** : `robot_audio.py` joue des fichiers WAV
+entiers (`ALAudioPlayer.playFile`). Il faut le passer en **lecture continue**
+pour Gemini Live : recevoir des morceaux PCM 24 kHz, les empiler dans une file
+et les jouer en flux. Pistes : `aplay`/`pacat` vers la sortie PulseAudio
+`speaker`, ou `ALAudioDevice.sendRemoteBufferToOutput`. Il faut aussi une
+commande de vidage pour les interruptions, et que le robot dise quand il a fini
+de parler (pour rouvrir le micro). `live.py` aura alors besoin d'un mode robot,
+qui se connecte au port 8090 comme `dialogue.py`. L'accueil devra être déclenché
+par le lidar avant (quelqu'un arrive).
+
 ## Trouvailles importantes
 
 ### Chauffe des moteurs (le point le plus critique)
@@ -437,6 +490,6 @@ Points à vérifier au premier essai sur le robot :
 3. Valider la chauffe sur **plusieurs heures** en attente, avec `temps.py`
    (à 23h42 : cou 36, hanches 52, genoux 50, hanches latérales 52 °C).
 4. Optionnel : mesurer le seuil exact de l'état 1 (relever `Status` en continu).
-5. **Dialogue** : premier essai sur le robot (voir la section « Dialogue avec
+5. **Dialogue** : passer `robot_audio.py` en lecture continue et ajouter un mode robot à `live.py` (Gemini Live), puis premier essai sur le robot (voir la section « Dialogue avec
    les enfants » et ses points à vérifier). La page web (port 8080) et le
    fantôme ne sont pas relancés depuis le redémarrage du 2026-10-18 au soir.

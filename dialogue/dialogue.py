@@ -14,6 +14,8 @@ Lancer :
   uv run dialogue.py                        # avec le robot
   uv run dialogue.py --file question.wav    # test sans robot : WAV 16 kHz mono,
                                             # réponses écrites dans out/
+  uv run dialogue.py --local                # test sans robot : micro et
+                                            # haut-parleurs du PC (WSLg)
   uv run dialogue.py --prompt ../halloween/preprompt_dialogue.txt   # autres consignes
 """
 import argparse
@@ -23,6 +25,7 @@ import queue
 import re
 import socket
 import struct
+import subprocess
 import threading
 import time
 import wave
@@ -45,6 +48,8 @@ STREAM_MAX = 240                  # relance du flux STT avant la limite de 5 min
 END_SILENCE = 0.4                 # fin de la phrase : ni parole ni résultat depuis (s)
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+HELLO = ("(Consigne, ce n'est pas un enfant qui parle : un enfant vient d'arriver devant "
+         "toi. Salue-le et engage la conversation, en une ou deux phrases.)")
 EYES_LISTEN = "0x0060ff"          # bleu : j'écoute
 EYES_THINK = "0xff8000"           # orange : je réfléchis
 
@@ -136,6 +141,47 @@ class FileLink:
         pass
 
 
+class LocalLink:
+    """Test sans robot : micro et haut-parleurs du PC (PulseAudio de WSLg, via ffmpeg).
+
+    Comme sur le robot, le micro est remplacé par du silence pendant que la
+    réponse est jouée (et TAIL s après), sinon Pepper s'entendrait lui-même.
+    """
+    TAIL = 0.4
+
+    def __init__(self):
+        self.rec = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "pulse", "-i", "default",
+             "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)  # avertissements d'horodatage de WSLg, sans effet
+        self.speaking = False
+        self.speaking_until = 0.0
+
+    def read(self):
+        data = self.rec.stdout.read(CHUNK)
+        if not data:
+            raise EOFError("micro du PC arrêté")
+        if self.speaking or time.time() < self.speaking_until:
+            data = b"\0" * len(data)
+        return data
+
+    def play(self, wav):
+        self.speaking = True
+        threading.Thread(target=self._play, args=(wav,), daemon=True).start()
+
+    def _play(self, wav):
+        try:
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "-",
+                            "-f", "pulse", "pepper"], input=wav)
+        finally:
+            self.speaking = False
+            self.speaking_until = time.time() + self.TAIL
+
+    def eyes(self, color):
+        pass
+
+
 # --- dialogue -------------------------------------------------------------
 
 class Dialogue:
@@ -201,15 +247,18 @@ class Dialogue:
         except Exception as e:
             log("LLM : %s" % e)
             reply = "Oups, je n'ai pas bien compris. Tu peux répéter ?"
+        log("   LLM %.1f s" % (time.time() - t0))
+        self.speak(reply)
+
+    def speak(self, reply):
         t1 = time.time()
         self.note("Pepper", reply)
         wav = self.tts.synthesize_speech(
             input=tts.SynthesisInput(text=reply), voice=self.voice,
             audio_config=tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16,
                                          sample_rate_hertz=24000)).audio_content
-        t2 = time.time()
         duration = (len(wav) - 44) / 2.0 / 24000
-        log("   LLM %.1f s, voix %.1f s, durée %.1f s" % (t1 - t0, t2 - t1, duration))
+        log("   voix %.1f s, durée %.1f s" % (time.time() - t1, duration))
         self.link.play(wav)
         self.busy_until = time.time() + duration + 0.5
         self.link.eyes(EYES_LISTEN)
@@ -248,8 +297,12 @@ class Dialogue:
     def run(self):
         threading.Thread(target=self.reader, daemon=True).start()
         threading.Thread(target=self.listen, daemon=True).start()
-        self.link.eyes(EYES_LISTEN)
         log("j'écoute (Ctrl+C pour arrêter)")
+        if HELLO:
+            # Pepper engage la conversation (consigne passée au LLM, pas dite à l'enfant)
+            self.answer(HELLO)
+        else:
+            self.link.eyes(EYES_LISTEN)
         while not self.ended:
             time.sleep(0.1)
             with self.lock:
@@ -268,11 +321,15 @@ def main():
     p.add_argument("--robot", default="pepper:8090",
                    help="hôte:port du pont audio (le nom court suffit sur le LAN)")
     p.add_argument("--file", help="WAV 16 kHz mono à la place du robot (test)")
+    p.add_argument("--local", action="store_true",
+                   help="micro et haut-parleurs du PC à la place du robot (test)")
     p.add_argument("--voice", default=VOICE)
     p.add_argument("--prompt", help="fichier texte des consignes du LLM (sinon SYSTEM)")
     args = p.parse_args()
     if args.file:
         link = FileLink(args.file)
+    elif args.local:
+        link = LocalLink()
     else:
         host, port = args.robot.rsplit(":", 1)
         link = RobotLink(host, int(port))
