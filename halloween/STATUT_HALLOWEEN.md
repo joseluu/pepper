@@ -359,6 +359,9 @@ WSL par `dialogue/live_windows.sh`.
 - `./live_windows.sh --list` liste les périphériques son ; `--mic N` et
   `--out N` en choisissent un.
 - Piège : `| tr -d '\r'` retient la sortie (pas d'affichage en direct).
+- Piège : tuer `live_windows.sh` côté WSL (`timeout`, Ctrl+C dans un pipe) ne
+  ferme **pas** le `python.exe` Windows, qui garde le micro. Pour l'arrêter :
+  `powershell.exe -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | ? { $_.CommandLine -like '*live.py*' } | % { Stop-Process -Id $_.ProcessId -Force }"`.
 
 `dialogue.py` (STT → LLM → TTS) reste dans le dépôt comme alternative (plus de
 contrôle sur le texte, mais plus lent). Il a aussi reçu un mode `--local` (son
