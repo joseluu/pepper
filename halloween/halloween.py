@@ -211,10 +211,12 @@ class Ghost(object):
         if talk:
             talk = not self.alarm_active()
             self.mem.insertData(DIALOGUE, "talk" if talk else "abort")
-        self.go_rest(3.0)
         if talk:
+            self.go_talk(2.0)   # reste droit pour parler avec l'enfant
             self.wait_dialogue()
-            self.go_rest(2.0)   # la tete a pu suivre l'enfant : la relacher
+            self.go_rest(2.0)   # fin de la rencontre : posture d'attente
+        else:
+            self.go_rest(3.0)
         if not self.alarm_active():
             self.audio.setOutputVolume(old_vol)
         if self.alarm:

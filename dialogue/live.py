@@ -86,6 +86,8 @@ SCARE_TOOL = types.Tool(function_declarations=[types.FunctionDeclaration(
                 "refaire peur, refaire le fantôme ou refaire le cri ; jamais de toi-même.")])
 NOT_ASKED = ("Aucun BOUH n'a été fait : l'enfant ne l'a pas demandé. Ne dis pas « Alors, "
              "tu as eu peur ? » ; réponds simplement à ce que l'enfant vient de dire.")
+# l'enfant s'en va : Pepper lui répond, puis la rencontre se termine
+GOODBYE_RE = re.compile(r"au ?revoir|bye", re.I)
 # demande de BOUH attendue dans la dernière phrase de l'enfant (« fais-moi peur »,
 # « refais le fantôme », « encore »...), mais pas « j'ai eu peur »
 ASK_SCARE = re.compile(r"\b(re)?fai(s|tes|re)\b.{0,15}(peur|fant[ôo]me|bouh|cri)"
@@ -286,6 +288,8 @@ class Live:
                                 self.first_audio = time.time()
                                 self.note("Enfant", self.heard)
                                 self.last_child = self.heard
+                                if GOODBYE_RE.search(self.heard):
+                                    self.leaving = True
                                 self.heard = ""
                                 if self.last_voice:
                                     log("   latence : %.1f s après la fin de la voix"
@@ -297,6 +301,8 @@ class Live:
                     self.speaker.flush()
                 if sc.turn_complete or sc.interrupted:
                     self.greeted.set()
+                    if self.leaving:     # Pepper a répondu à « au revoir »
+                        self.left = True
                     self.note("Pepper", self.said)
                     if self.speaker.underruns:
                         log("   (sortie son : %d manques de données)" % self.speaker.underruns)
@@ -335,6 +341,7 @@ class Live:
         self.heard_at = 0.0
         self.last_child = ""
         self.greeted = asyncio.Event()
+        self.leaving = self.left = False
         self.first_audio = None
         self.last_activity = time.time()
         await session.send_client_content(
@@ -359,6 +366,9 @@ class Live:
         while True:
             await asyncio.sleep(0.5)
             now = time.time()
+            if self.left and not getattr(self.speaker, "talking", False):
+                log("   (l'enfant a dit au revoir)")
+                return
             # le rire du BOUH et la voix de Pepper ne sont pas un silence
             if self.scaring or getattr(self.speaker, "talking", False):
                 self.last_activity = now
