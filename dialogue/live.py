@@ -78,10 +78,12 @@ SCARE_TOOL = types.Tool(function_declarations=[types.FunctionDeclaration(
                 "deviennent rouges et il joue un rire de fantôme (environ 12 secondes). "
                 "À appeler seulement quand l'enfant vient de demander avec des mots de "
                 "refaire peur, refaire le fantôme ou refaire le cri ; jamais de toi-même.")])
-NOT_ASKED = ("L'enfant n'a pas demandé de BOUH : ne refais pas peur sans qu'il le "
-             "demande. Continue la conversation.")
-# mots attendus dans la dernière phrase de l'enfant pour accepter un BOUH
-ASK_SCARE = re.compile(r"peur|fant[ôo]me|bouh|cri|recommence|encore", re.I)
+NOT_ASKED = ("Aucun BOUH n'a été fait : l'enfant ne l'a pas demandé. Ne dis pas « Alors, "
+             "tu as eu peur ? » ; réponds simplement à ce que l'enfant vient de dire.")
+# demande de BOUH attendue dans la dernière phrase de l'enfant (« fais-moi peur »,
+# « refais le fantôme », « encore »...), mais pas « j'ai eu peur »
+ASK_SCARE = re.compile(r"\b(re)?fai(s|tes|re)\b.{0,15}(peur|fant[ôo]me|bouh|cri)"
+                       r"|encore|recommence|bouh|\bcri\b", re.I)
 MAX_TALK = 300.0                 # robot : durée max d'une rencontre (s)
 ROBOT_PORT = 8090
 ROBOT_GAIN = 8.0                 # micro du robot très faible (parole vers -35 dBFS)
@@ -242,7 +244,7 @@ class Live:
             else:
                 x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                 if np.sqrt(np.mean(x * x)) > self.speech_rms:
-                    self.last_voice = self.last_activity = time.time()
+                    self.last_voice = time.time()
             await session.send_realtime_input(
                 audio=types.Blob(data=data, mime_type="audio/pcm;rate=%d" % IN_RATE))
 
@@ -262,6 +264,8 @@ class Live:
                     self.heard_at = time.time()
                     if any(c.isalpha() for c in sc.input_transcription.text):
                         self.speaker.heard()
+                        # des mots compris, pas seulement du bruit dans la pièce
+                        self.last_activity = time.time()
                 if sc.output_transcription and sc.output_transcription.text:
                     self.said += sc.output_transcription.text
                 if sc.model_turn:
