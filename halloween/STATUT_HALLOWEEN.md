@@ -52,9 +52,32 @@ l'installation dans `~/halloween`.
 Au démarrage du robot, deux **services utilisateur** de `nao` lancent le pont
 audio du dialogue puis le fantôme (`halloween/systemd/`, installés dans
 `~/.config/systemd/user/`). Chacun attend d'abord que NAOqi réponde
-(`wait_naoqi.py`, plusieurs minutes après l'allumage). Le PC lance ensuite
-`live.py --robot pepper` (voix Puck par défaut) pour que le fantôme dialogue
-après son BOUH ; sans PC, il fait seulement son BOUH.
+(`wait_naoqi.py`, plusieurs minutes après l'allumage). Le dialogue Gemini Live
+(`live.py --robot pepper`, voix Puck) tourne **sur tram**, en service permanent
+qui se reconnecte au robot : le PC n'est plus nécessaire. Sans `live.py`
+connecté, le fantôme fait seulement son BOUH. Rallumage testé le 2026-10-23 :
+fantôme armé ~1 min 20 après le retour du réseau.
+
+### Dialogue sur tram (2026-10-23)
+
+- Code : clone partiel du dépôt dans `~/pepper` sur tram
+  (`git clone --depth 1 --filter=blob:none --sparse …` puis
+  `git sparse-checkout set dialogue halloween`) ; mise à jour par `git pull`
+  puis `systemctl --user restart pepper-dialogue`.
+- Python : `uv` dans `~/.local/bin` (dépendances de l'en-tête de `live.py`).
+- Identifiants : compte de service `pepper-dialogue` du projet GCP, avec le seul
+  rôle **Vertex AI User** ; sa clé est dans `~/.config/pepper-dialogue/sa.json`
+  (droits 600), créée directement sur tram, **jamais dans le dépôt**. Pour la
+  révoquer : `gcloud iam service-accounts keys list/delete --iam-account
+  pepper-dialogue@<projet>.iam.gserviceaccount.com`.
+- Service utilisateur `dialogue/systemd/pepper-dialogue.service`
+  (`~/.config/systemd/user/`, `loginctl enable-linger` pour tourner sans
+  session). Journal : `journalctl --user -u pepper-dialogue -f`. Transcriptions
+  dans `~/pepper/dialogue/logs/` sur tram (hors dépôt).
+- Le blocage TCP de l'hôte tram vers le robot constaté en juin n'existe plus
+  (SSH et HTTP passent avec les sources `.135` et `.11`).
+- Un seul client à la fois sur le pont audio : arrêter le service de tram
+  (`systemctl --user stop pepper-dialogue`) avant de lancer `live.py` sur le PC.
 
 ```bash
 # Installer (une fois)

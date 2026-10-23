@@ -1,0 +1,27 @@
+# Service UTILISATEUR sur le serveur du LAN (tram) : Gemini Live pour le
+# fantôme d'Halloween, connecté au pont audio du robot (robot_audio.py, port
+# 8090). Il se reconnecte tout seul quand le robot redémarre.
+#
+# Prérequis (voir halloween/STATUT_HALLOWEEN.md, « Dialogue sur tram ») :
+#   - dépôt cloné dans ~/pepper (dialogue/ et halloween/), uv dans ~/.local/bin ;
+#   - clé du compte de service (rôle Vertex AI User seulement) dans
+#     ~/.config/pepper-dialogue/sa.json, droits 600, jamais dans le dépôt ;
+#   - loginctl enable-linger (le service tourne sans session ouverte).
+# Installation :
+#   cp dialogue/systemd/pepper-dialogue.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now pepper-dialogue
+[Unit]
+Description=Pepper Halloween dialogue (Gemini Live <-> robot audio bridge)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pepper/dialogue
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/pepper-dialogue/sa.json
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/.local/bin/uv run --script live.py --robot pepper
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
