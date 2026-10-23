@@ -35,6 +35,7 @@ Directement sous Windows :
 import argparse
 import asyncio
 import json
+import re
 import os
 import socket
 import struct
@@ -64,6 +65,23 @@ TAIL = 0.4                       # micro coupé encore TAIL s après la fin de l
 SPEECH_RMS = 500                 # au-dessus : quelqu'un parle (micro du PC)
 ROBOT_SPEECH_RMS = 250           # idem, micro du robot avant gain (fond ~65)
 IDLE = 20.0                      # robot : fin de la rencontre après IDLE s de calme
+RELAUNCH = 7.0                   # robot : relance après RELAUNCH s de silence de l'enfant
+MAX_RELAUNCH = 2                 # relances au plus par rencontre
+RELAUNCH_TEXT = ("(Consigne, ce n'est pas un enfant qui parle : l'enfant ne dit plus rien. "
+                 "Relance-le en lui demandant exactement : « En quoi es-tu déguisé ? ». "
+                 "S'il te l'a déjà dit, pose-lui une autre petite question.)")
+SCARED_TEXT = ("Le BOUH est fini. Demande maintenant à l'enfant exactement : "
+               "« Alors, tu as eu peur ? »")
+SCARE_TOOL = types.Tool(function_declarations=[types.FunctionDeclaration(
+    name="refaire_peur",
+    description="Refait le BOUH du fantôme : Pepper se redresse, lève les bras, ses yeux "
+                "deviennent rouges et il joue un rire de fantôme (environ 12 secondes). "
+                "À appeler seulement quand l'enfant vient de demander avec des mots de "
+                "refaire peur, refaire le fantôme ou refaire le cri ; jamais de toi-même.")])
+NOT_ASKED = ("L'enfant n'a pas demandé de BOUH : ne refais pas peur sans qu'il le "
+             "demande. Continue la conversation.")
+# mots attendus dans la dernière phrase de l'enfant pour accepter un BOUH
+ASK_SCARE = re.compile(r"peur|fant[ôo]me|bouh|cri|recommence|encore", re.I)
 MAX_TALK = 300.0                 # robot : durée max d'une rencontre (s)
 ROBOT_PORT = 8090
 ROBOT_GAIN = 8.0                 # micro du robot très faible (parole vers -35 dBFS)
@@ -116,6 +134,11 @@ class Speaker:
     def heard(self):
         pass
 
+    def scare(self):
+        """Pas de robot : le BOUH est seulement annoncé."""
+        log("   (BOUH : rien à faire sans le robot)")
+        asyncio.get_running_loop().call_later(1, self.scared.set)
+
     def flush(self):
         """Coupe net (l'enfant a interrompu Pepper)."""
         with self.lock:
@@ -129,6 +152,8 @@ class RobotLink:
     micro par du silence quand il parle, et qui signale la fin ("quiet").
     """
     underruns = 0
+    scared = None                    # asyncio.Event posé par Live.tool
+    talking = False                  # le robot joue encore la voix reçue
 
     def __init__(self, host, port):
         self.host, self.port = host, port
@@ -149,7 +174,11 @@ class RobotLink:
         self.writer.write(struct.pack(">I", len(h)) + h + data)
 
     def write(self, pcm):
+        self.talking = True          # jusqu'au "quiet" du robot
         self.send("pcm", pcm)
+
+    def scare(self):
+        self.send("scare")
 
     def flush(self):
         self.send("flush")
@@ -179,11 +208,15 @@ class Live:
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    silence_duration_ms=500)))
+                    silence_duration_ms=500)),
+            tools=[SCARE_TOOL])
         self.barge_in = barge_in
         self.speaker = None          # Speaker (PC) ou RobotLink
         self.last_voice = 0.0        # dernier morceau de micro avec de la voix
         self.last_activity = 0.0     # voix de l'enfant ou de Pepper
+        self.scaring = False         # BOUH redemandé en cours
+        self.last_child = ""         # dernière phrase de l'enfant (avant un BOUH)
+        self.scared = None           # asyncio.Event : le BOUH redemandé est fini
         self.heard = ""
         self.heard_at = 0.0          # dernier morceau de transcription de l'enfant
         self.said = ""
@@ -218,6 +251,9 @@ class Live:
             async for r in session.receive():
                 if r.go_away:
                     log("   (Gemini va fermer la session dans %s)" % r.go_away.time_left)
+                if r.tool_call:
+                    for fc in r.tool_call.function_calls:
+                        asyncio.create_task(self.tool(session, fc))
                 sc = r.server_content
                 if not sc:
                     continue
@@ -234,6 +270,7 @@ class Live:
                             if self.first_audio is None:
                                 self.first_audio = time.time()
                                 self.note("Enfant", self.heard)
+                                self.last_child = self.heard
                                 self.heard = ""
                                 if self.last_voice:
                                     log("   latence : %.1f s après la fin de la voix"
@@ -251,10 +288,36 @@ class Live:
                     self.said = ""
                     self.first_audio = None
 
+    async def tool(self, session, fc):
+        """Outil appelé par Gemini : refaire_peur (attend la fin du BOUH)."""
+        if fc.name != "refaire_peur":
+            result = {"error": "outil inconnu"}
+        elif not ASK_SCARE.search(self.heard + " " + self.last_child):
+            # Gemini l'a appelé de lui-même
+            log("   BOUH refusé : l'enfant ne l'a pas demandé")
+            result = {"error": NOT_ASKED}
+        else:
+            self.last_child = ""
+            log("   BOUH redemandé")
+            self.scaring = True
+            self.scared = asyncio.Event()
+            self.speaker.scared = self.scared
+            self.speaker.scare()
+            try:
+                await asyncio.wait_for(self.scared.wait(), 40)
+                result = {"result": SCARED_TEXT}
+            except TimeoutError:
+                result = {"error": "le BOUH n'a pas pu être fait"}
+            self.scaring = False
+            self.last_activity = time.time()
+        await session.send_tool_response(function_responses=[
+            types.FunctionResponse(id=fc.id, name=fc.name, response=result)])
+
     async def talk(self, session, q, idle=False):
         """Salue l'enfant puis dialogue ; avec idle, s'arrête quand c'est calme."""
         self.heard = self.said = ""
         self.heard_at = 0.0
+        self.last_child = ""
         self.first_audio = None
         self.last_activity = time.time()
         await session.send_client_content(
@@ -263,7 +326,7 @@ class Live:
         tasks = [asyncio.create_task(self.mic(session, q)),
                  asyncio.create_task(self.receive(session))]
         if idle:
-            tasks.append(asyncio.create_task(self.watchdog()))
+            tasks.append(asyncio.create_task(self.watchdog(session)))
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
@@ -272,15 +335,29 @@ class Live:
             for t in tasks:
                 t.cancel()
 
-    async def watchdog(self):
+    async def watchdog(self, session):
         start = time.time()
+        relaunches = 0
+        relaunched_at = None         # last_activity au moment de la dernière relance
         while True:
             await asyncio.sleep(0.5)
             now = time.time()
+            # le rire du BOUH et la voix de Pepper ne sont pas un silence
+            if self.scaring or getattr(self.speaker, "talking", False):
+                self.last_activity = now
+                continue
             if self.heard_at and self.first_audio is None and now - self.heard_at > 4:
                 if self.heard.strip():
                     log("   entendu, sans réponse : %s" % self.heard.strip())
                 self.heard_at = 0.0
+            if (now - self.last_activity > RELAUNCH and relaunches < MAX_RELAUNCH
+                    and relaunched_at != self.last_activity):
+                relaunches += 1
+                relaunched_at = self.last_activity
+                log("   (silence : relance)")
+                await session.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part(text=RELAUNCH_TEXT)]),
+                    turn_complete=True)
             if now - self.last_activity > IDLE:
                 log("   (plus personne depuis %.0f s)" % IDLE)
                 return
@@ -329,12 +406,15 @@ class Live:
                     x = np.frombuffer(data, dtype=np.int16).astype(np.float32) * self.gain
                     q.put_nowait(np.clip(x, -32768, 32767).astype(np.int16).tobytes())
             elif cmd == "quiet":
+                link.talking = False
                 self.last_activity = time.time()
                 if task:
                     log("   (le robot a fini de parler)")
             elif cmd == "event":
                 name = head.get("name")
                 log("   (fantôme : %s)" % name)
+                if name == "scared" and link.scared:
+                    link.scared.set()
                 if name in ("prepare", "talk") and task is None:
                     q, go = asyncio.Queue(), asyncio.Event()
                     task = asyncio.create_task(self.encounter(link, q, go))

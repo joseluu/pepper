@@ -193,10 +193,29 @@ class Ghost(object):
             self.mem.insertData(DIALOGUE, "prepare")
         if self.alarm:
             self.alarm.reset_peaks()  # pour calibrer : ce que le BOUH secoue
-        self.motion.setStiffnesses("Head", 1.0)
-        self.leds_red()
         old_vol = self.audio.getOutputVolume()
         self.audio.setOutputVolume(self.args.volume)
+        self.boo()
+        if talk:
+            talk = not self.alarm_active()
+            self.mem.insertData(DIALOGUE, "talk" if talk else "abort")
+        self.go_rest(3.0)
+        if talk:
+            self.wait_dialogue()
+            self.go_rest(2.0)   # la tete a pu suivre l'enfant : la relacher
+        if not self.alarm_active():
+            self.audio.setOutputVolume(old_vol)
+        if self.alarm:
+            p = self.alarm.peaks
+            log("secousse du BOUH (base) : inclinaison %.1f deg, ecart acc %.2f, "
+                "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
+        time.sleep(self.args.cooldown)
+        self.baseline = None  # le fond peut avoir change (gens, drap)
+
+    def boo(self):
+        """Le geste : yeux rouges, redressement, bras leves, rire de Thriller."""
+        self.motion.setStiffnesses("Head", 1.0)
+        self.leds_red()
         play = self.player.playFile(SOUND, 1.0, 0.0, _async=True)
         names = sorted(SCARE.keys())
         self.motion.angleInterpolation(
@@ -216,21 +235,6 @@ class Ghost(object):
             time.sleep(0.9)
         self.motion.setAngles("HipRoll", 0.0, 0.10)
         play.wait()
-        if talk:
-            talk = not self.alarm_active()
-            self.mem.insertData(DIALOGUE, "talk" if talk else "abort")
-        self.go_rest(3.0)
-        if talk:
-            self.wait_dialogue()
-            self.go_rest(2.0)   # la tete a pu suivre l'enfant : la relacher
-        if not self.alarm_active():
-            self.audio.setOutputVolume(old_vol)
-        if self.alarm:
-            p = self.alarm.peaks
-            log("secousse du BOUH (base) : inclinaison %.1f deg, ecart acc %.2f, "
-                "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
-        time.sleep(self.args.cooldown)
-        self.baseline = None  # le fond peut avoir change (gens, drap)
 
     def dialogue_ready(self):
         try:
@@ -251,6 +255,12 @@ class Ghost(object):
                 log("le pont audio ne repond pas")
                 self.mem.insertData(DIALOGUE, "idle")
                 break
+            if state == "scare":    # l'enfant a demande de refaire peur
+                log("BOUH redemande pendant le dialogue")
+                self.boo()
+                self.go_rest(3.0)
+                self.mem.insertData(DIALOGUE, "active")
+                continue
             if self.alarm_active() or now - t0 > self.args.dialogue_max:
                 log("dialogue interrompu")
                 self.mem.insertData(DIALOGUE, "abort")

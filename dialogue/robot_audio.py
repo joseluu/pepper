@@ -18,11 +18,15 @@
 #     {"cmd": "quiet"}              le robot vient de finir de parler
 #     {"cmd": "event", "name": E}   signal du fantome (halloween.py) :
 #                                   "prepare" (BOUH en cours), "talk" (fin du
-#                                   rire : saluer l'enfant), "abort" (sirene)
+#                                   rire : saluer l'enfant), "abort" (sirene),
+#                                   "scared" (BOUH redemande : fini)
 #   PC -> robot :
 #     {"cmd": "pcm", "size": N}     voix en continu, PCM 16 bits mono 24 kHz
 #     {"cmd": "flush"}              coupe net la voix en cours (interruption)
 #     {"cmd": "end"}                fin de la rencontre (une fois la voix finie)
+#     {"cmd": "scare"}              refaire le BOUH (l'enfant l'a demande), une
+#                                   fois la voix finie : par le fantome s'il
+#                                   tourne, sinon juste le rire, yeux rouges
 #     {"cmd": "heard"}              Gemini a transcrit des mots de l'enfant :
 #                                   pendant un dialogue, la tete se tourne vers
 #                                   la derniere voix reperee par le micro
@@ -34,7 +38,9 @@
 #   Halloween/DialoguePC  1 quand un PC est connecte
 #   Halloween/Dialogue    "idle" -> "prepare" -> "talk" (ecrits par le fantome)
 #                         -> "active" (ecrit ici) -> "idle" (apres "end"), ou
-#                         "abort" (fantome) -> "idle"
+#                         "abort" (fantome) -> "idle" ;
+#                         "active" -> "scare" (ecrit ici) -> "active" (fantome,
+#                         une fois le BOUH fini)
 #
 # Direction de la voix : le ReSpeaker (premiere Mic Array, 2886:0007) envoie
 # par HID, au debut et a la fin de chaque voix, un rapport
@@ -52,6 +58,7 @@ OUT_RATE = 24000                # voix de Gemini Live
 LATENCY = 0.15                  # tampon de pacat (s)
 TAIL = 0.4                      # silence garde apres la fin de la parole (s)
 PLAY_FILE = "/tmp/dialogue_say.wav"
+LAUGH = os.path.expanduser("~/halloween/thriller_laugh.wav")
 KEY = "Halloween/Dialogue"
 PC_KEY = "Halloween/DialoguePC"
 LOOK_MAX = 110                  # au-dela (deg), voix de derriere : ignoree
@@ -180,6 +187,7 @@ class Bridge(object):
         self.speaking_until = 0.0   # micro muet jusqu'a cette heure (WAV)
         self.speaking = False
         self.ending = False         # le PC a fini : repasser a idle apres la voix
+        self.scaring = False        # BOUH redemande en cours
         self.state = "idle"
         self.set_state("idle")
         self.mem.insertData(PC_KEY, 0)
@@ -231,6 +239,8 @@ class Bridge(object):
                     self.ending = True
                 elif cmd == "heard":
                     self.look()
+                elif cmd == "scare":
+                    threading.Thread(target=self.scare).start()
                 elif cmd == "play":
                     with open(PLAY_FILE, "wb") as f:
                         f.write(data)
@@ -253,8 +263,37 @@ class Bridge(object):
             self.speaking = False
             self.speaking_until = time.time() + TAIL
 
+    def ghost_alive(self):
+        try:    # battement de halloween.py, toutes les 0,2 s pendant un dialogue
+            return time.time() - self.mem.getData("Halloween/Ghost") < 3
+        except Exception:
+            return False
+
+    def scare(self):
+        """Refait le BOUH apres la voix en cours, puis previent le PC."""
+        self.scaring = True
+        try:
+            while self.stream.speaking():
+                time.sleep(0.1)
+            if self.state == "active" and self.ghost_alive():
+                self.log("BOUH demande au fantome")
+                self.set_state("scare")
+                t0 = time.time()
+                while self.mem.getData(KEY) == "scare" and time.time() - t0 < 30:
+                    time.sleep(0.2)
+                self.state = self.mem.getData(KEY)
+            else:
+                self.log("BOUH sans le fantome : rire seul")
+                self.leds.fadeRGB("FaceLeds", 0xFF0000, 0.0)
+                self.player.playFile(LAUGH)
+                self.leds.fadeRGB("FaceLeds", 0x000000, 0.3)
+            self.speaking_until = time.time() + TAIL
+        finally:
+            self.scaring = False
+        self.send({"cmd": "event", "name": "scared"})
+
     def busy(self):
-        return (self.speaking or time.time() < self.speaking_until
+        return (self.speaking or self.scaring or time.time() < self.speaking_until
                 or self.stream.speaking())
 
     # --- fantome -> PC ---
