@@ -165,12 +165,14 @@ class RobotLink:
     underruns = 0
     scared = None                    # asyncio.Event posé par Live.tool
     talking = False                  # le robot joue encore la voix reçue
+    connected = False
 
     def __init__(self, host, port):
         self.host, self.port = host, port
 
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+        self.connected = True
         self.writer.get_extra_info("socket").setsockopt(
             socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -423,13 +425,27 @@ class Live:
                 await self.talk(session, q)
 
     async def run_robot(self, host, port):
-        """Reste connecté au robot : se reconnecte s'il redémarre son pont audio."""
+        """Reste connecté au robot : se reconnecte s'il redémarre son pont audio.
+        Robot éteint (parfois des jours) : délai croissant jusqu'à 60 s et une
+        ligne de journal par heure au plus, pour ne pas remplir les logs."""
+        delay, since, told = 3, None, 0
         while True:
+            err = "fin"
             try:
                 await self.serve_robot(host, port)
             except (asyncio.IncompleteReadError, OSError) as e:
-                log("robot déconnecté (%s), nouvel essai dans 3 s" % e.__class__.__name__)
-            await asyncio.sleep(3)
+                err = e.__class__.__name__
+            if self.speaker.connected:      # était connecté : on repart vite
+                delay, since = 3, None
+            now = time.time()
+            if since is None:
+                since = told = now
+                log("robot déconnecté (%s), nouveaux essais en silence" % err)
+            elif now - told >= 3600:
+                told = now
+                log("robot toujours injoignable depuis %.0f h" % ((now - since) / 3600))
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
 
     async def serve_robot(self, host, port):
         link = self.speaker = RobotLink(host, port)
