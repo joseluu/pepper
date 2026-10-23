@@ -1,16 +1,17 @@
+# nao USER service (~/.config/systemd/user/), not a system service:
+# /etc/systemd/system lives in the /etc overlay mounted from /data, which
+# systemd reads too late at boot (units enabled there never start).
+# Install: scp to pepper:.config/systemd/user/ then
+#   XDG_RUNTIME_DIR=/run/user/1001 systemctl --user enable --now go2rtc.service
 [Unit]
 Description=go2rtc camera streamer (Pepper cameras -> RTSP/MJPEG for Frigate)
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-User=nao
-Group=nao
 WorkingDirectory=/data/go2rtc
 ExecStart=/data/go2rtc/go2rtc -config /data/go2rtc/go2rtc.yaml
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

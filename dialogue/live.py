@@ -478,7 +478,7 @@ class Live:
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--prompt", default=DEFAULT_PROMPT, help="fichier texte des consignes")
-    p.add_argument("--voice", default="Leda", help="Leda, Aoede, Kore, Puck, Charon...")
+    p.add_argument("--voice", default="Puck", help="Puck, Leda, Aoede, Kore, Charon...")
     p.add_argument("--barge-in", action="store_true",
                    help="micro ouvert pendant que Pepper parle (avec un casque)")
     p.add_argument("--robot", metavar="HÔTE[:PORT]",

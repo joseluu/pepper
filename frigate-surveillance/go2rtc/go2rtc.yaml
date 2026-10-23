@@ -17,4 +17,6 @@ streams:
 
   # Head camera (top, forehead) - held by naoqi-service, bridged via ALVideoDevice
   # args: <camera> <resolution> <fps>  (0=top cam, 2=VGA 640x480, 5 fps)
-  head: exec:sh -c "exec env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 /data/go2rtc/naoqi_cam.py 0 2 5"
+  # Disabled 2026-10-23: only the bottom camera is streamed (the head moves
+  # during the Halloween dialogue, and the bridge costs CPU on the Atom).
+  # head: exec:sh -c "exec env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 /data/go2rtc/naoqi_cam.py 0 2 5"

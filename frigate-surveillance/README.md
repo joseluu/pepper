@@ -8,6 +8,12 @@ Both of Pepper's usable cameras are exposed as standard **RTSP/MJPEG** streams,
 and the head can be moved over **ONVIF PTZ** — all served from the robot itself,
 with no extra hardware.
 
+> **Current setup (2026-10-23): only the bottom camera is streamed.** The `head`
+> stream is commented out in `go2rtc/go2rtc.yaml` and `frigate/cameras.yml`, and
+> the ONVIF PTZ bridge is not installed: the head is driven by the Halloween
+> ghost and its dialogue (`../halloween/`). Uncomment both and reinstall
+> `onvif-ptz.service` (as a user service, see step 3) to get them back.
+
 ---
 
 ## Features
@@ -154,15 +160,23 @@ scp onvif/onvif_ptz.py   pepper:/data/onvif/onvif_ptz.py
 
 ### 3. Install and start the systemd services
 
+**Install them as user services of `nao`, not as system services.** On NAOqiOS,
+`/etc` is an overlay mounted from `/data`, and systemd builds its boot
+transaction before that mount: a unit enabled in `/etc/systemd/system` is never
+started at boot (found on 2026-10-23: `go2rtc`, `onvif-ptz` and the keep-awake
+timer had not started since the last reboot). The `nao` user manager (which also
+runs NAOqi) starts later and reads `~/.config/systemd/user/`.
+
 ```bash
-scp systemd/go2rtc.service     pepper:/tmp/
-scp systemd/onvif-ptz.service  pepper:/tmp/
-ssh pepper '
-  sudo mv /tmp/go2rtc.service /tmp/onvif-ptz.service /etc/systemd/system/ &&
-  sudo systemctl daemon-reload &&
-  sudo systemctl enable --now go2rtc onvif-ptz &&
-  systemctl is-active go2rtc onvif-ptz'
+scp systemd/go2rtc.service pepper:.config/systemd/user/
+ssh pepper 'export XDG_RUNTIME_DIR=/run/user/1001 &&
+  systemctl --user daemon-reload &&
+  systemctl --user enable --now go2rtc &&
+  systemctl --user is-active go2rtc'
 ```
+
+For `onvif-ptz.service` (and `pepper-keepawake.*`), drop the `User=`/`Group=`
+lines and use `WantedBy=default.target` in the same way.
 
 > Note: this robot runs systemd **v229** — do not add `StartLimitIntervalSec` to
 > the `[Service]` section (it is rejected as an unknown key).

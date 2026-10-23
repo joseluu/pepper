@@ -1,0 +1,21 @@
+# Service UTILISATEUR de nao (~/.config/systemd/user/), pas un service systeme :
+# /etc/systemd/system est dans la couche /etc montee depuis /data, que systemd
+# lit trop tard au demarrage (les services qui y sont actives ne demarrent pas).
+# Installation : voir halloween/STATUT_HALLOWEEN.md (Demarrage automatique).
+[Unit]
+Description=Halloween ghost (lidar -> BOUH, then Gemini Live dialogue if the PC is connected)
+After=halloween-dialogue.service
+Wants=halloween-dialogue.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nao/halloween
+Environment=PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages
+ExecStartPre=/usr/bin/python2 /home/nao/halloween/wait_naoqi.py
+ExecStart=/bin/sh -c 'exec /usr/bin/python2 halloween.py >> run.log 2>&1'
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

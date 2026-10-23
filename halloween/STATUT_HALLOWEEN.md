@@ -47,6 +47,36 @@ Dans le dépôt (`halloween/`) et sur le robot (`/home/nao/halloween/`) :
 `/data` n'est **pas** inscriptible par `nao` (seul `/data/home/nao` l'est), d'où
 l'installation dans `~/halloween`.
 
+## Démarrage automatique (2026-10-23)
+
+Au démarrage du robot, deux **services utilisateur** de `nao` lancent le pont
+audio du dialogue puis le fantôme (`halloween/systemd/`, installés dans
+`~/.config/systemd/user/`). Chacun attend d'abord que NAOqi réponde
+(`wait_naoqi.py`, plusieurs minutes après l'allumage). Le PC lance ensuite
+`live.py --robot pepper` (voix Puck par défaut) pour que le fantôme dialogue
+après son BOUH ; sans PC, il fait seulement son BOUH.
+
+```bash
+# Installer (une fois)
+scp halloween/wait_naoqi.py pepper:halloween/
+scp halloween/systemd/halloween.service halloween/systemd/halloween-dialogue.service pepper:.config/systemd/user/
+ssh pepper 'export XDG_RUNTIME_DIR=/run/user/1001; systemctl --user daemon-reload; systemctl --user enable halloween.service halloween-dialogue.service'
+# État, arrêt, relance (sur le robot, avec XDG_RUNTIME_DIR=/run/user/1001)
+systemctl --user status halloween halloween-dialogue
+systemctl --user stop halloween          # le fantôme
+systemctl --user restart halloween-dialogue
+```
+
+**Pourquoi pas des services système** : `/etc` est une couche montée depuis
+`/data` après que systemd a calculé les services du démarrage. Un service activé
+dans `/etc/systemd/system` ne démarre donc jamais au boot (c'était aussi le cas
+de `go2rtc`, `onvif-ptz` et du minuteur keep-awake). Le gestionnaire utilisateur
+de `nao`, qui lance aussi NAOqi, démarre plus tard.
+
+Les journaux s'ajoutent à `~/halloween/run.log` et `~/dialogue/bridge.log`.
+Option de test `--greet` (dialogue dès l'arrivée, sans BOUH d'accueil) : non
+utilisée au démarrage.
+
 ## Commandes
 
 ```bash
@@ -214,7 +244,7 @@ redescendre » noté plus tôt (pas un embrayage).
 - Conséquence : les bras ne s'arrêtent plus si quelqu'un est tout près pendant
   le BOUH. La protection des déplacements (« Move ») reste active.
 
-## Dialogue avec les enfants (`../dialogue/`) — Gemini Live sur le robot, en test depuis le 2026-10-23
+## Dialogue avec les enfants (`../dialogue/`) — Gemini Live sur le robot, figé le 2026-10-23
 
 But : parler avec les enfants. Le micro USB écoute, la transcription passe le
 texte au LLM, la synthèse vocale répond. Les micros internes du robot ne
@@ -380,7 +410,7 @@ a été supprimé.
 scp dialogue/robot_audio.py pepper:dialogue/
 ssh pepper 'cd ~/dialogue && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages setsid nohup python2 -u robot_audio.py > bridge.log 2>&1 < /dev/null &'
 # Sur le PC (sous WSL : pas de son local, donc pas besoin de Windows)
-cd dialogue && uv run --script live.py --robot pepper      # --gain 8 par défaut
+cd dialogue && uv run --script live.py --robot pepper      # voix Puck, --gain 20 par défaut
 ```
 
 **Déroulé d'une rencontre** (échange par ALMemory) :
@@ -397,6 +427,19 @@ cd dialogue && uv run --script live.py --robot pepper      # --gain 8 par défau
    la tête, revient au repos et se ré-arme. Sirène pendant le dialogue : le
    fantôme écrit `abort`, la voix est coupée.
 5. Sans PC connecté, le fantôme fait seulement son BOUH.
+6. **BOUH redemandé** : si l'enfant dit « fais-moi peur », « refais le
+   fantôme », « encore »…, Gemini appelle l'outil `refaire_peur`. Le PC
+   vérifie que la dernière phrase de l'enfant le demande vraiment (sinon refus),
+   le fantôme refait son BOUH, puis reste **droit** (posture `TALK`) et Pepper
+   demande « Alors, tu as eu peur ? ».
+7. **Relance** après 10 s sans phrase comprise (au plus 2 fois) : « En quoi
+   es-tu déguisé ? », ou une autre question s'il l'a déjà dit. La fin de
+   rencontre se décide sur ce que Gemini transcrit (20 s sans rien), pas sur le
+   volume : les bruits de la pièce ne la prolongent pas. Pepper dit alors au
+   revoir, puis le fantôme reprend sa posture d'attente.
+8. Voix **Puck**, ton lent et mystérieux (pré-prompt). Gain du micro ×20 avec
+   écrêtage doux, pour entendre jusqu'à ~2 m (au prix de voix de la pièce
+   parfois transcrites).
 
 **Pont audio (`robot_audio.py`)** : messages encadrés dans les deux sens
 (4 octets de longueur, en-tête JSON, données ; détail en tête du fichier).
@@ -410,7 +453,7 @@ cd dialogue && uv run --script live.py --robot pepper      # --gain 8 par défau
 1300 sur 32768, bruit de fond ~65), alors que le volume de capture du
 ReSpeaker est déjà au maximum (`numid=9`, 127/128). Gemini comprenait mal
 (« Un peu mouillé sur la gauche ») et laissait des phrases sans réponse.
-`live.py` applique un **gain logiciel ×8** (`--gain`) avant Gemini.
+`live.py` applique un **gain logiciel** avant Gemini (`--gain`) : ×8 au début, puis ×20 avec écrêtage doux pour entendre à 2 m.
 
 **Panne USB du micro (2026-10-23, 17:29)** : le noyau signalait
 `usb 1-4: usb_set_interface failed (-71)` et `arecord` échouait

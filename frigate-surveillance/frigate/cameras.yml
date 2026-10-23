@@ -11,34 +11,35 @@
 # cameras on nvidia hwaccel as usual.
 
 cameras:
-  # Head camera (forehead) — bridged from NAOqi, ONVIF PTZ controllable
-  pepper_head:
-    enabled: true
-    ffmpeg:
-      hwaccel_args: []                 # MJPEG -> CPU decode, never the GPU NVDEC
-      inputs:
-        - path: rtsp://pepper:8554/head
-          input_args: preset-rtsp-generic
-          roles: [ detect, record ]
-    detect:
-      enabled: true
-      width: 640
-      height: 480
-      fps: 5
-    record:
-      enabled: true
-      retain:
-        days: 3
-        mode: motion
-    onvif:
-      host: pepper
-      port: 8000
-      user: "admin"                    # credentials are ignored by the bridge
-      password: "admin"
-      # autotracking:                  # optional, experimental
-      #   enabled: true
-      #   track: [ person ]
-      #   zooming: disabled
+  # Head camera disabled 2026-10-23: only the bottom camera is streamed.
+#  # Head camera (forehead) — bridged from NAOqi, ONVIF PTZ controllable
+#  pepper_head:
+#    enabled: true
+#    ffmpeg:
+#      hwaccel_args: []                 # MJPEG -> CPU decode, never the GPU NVDEC
+#      inputs:
+#        - path: rtsp://pepper:8554/head
+#          input_args: preset-rtsp-generic
+#          roles: [ detect, record ]
+#    detect:
+#      enabled: true
+#      width: 640
+#      height: 480
+#      fps: 5
+#    record:
+#      enabled: true
+#      retain:
+#        days: 3
+#        mode: motion
+#    onvif:
+#      host: pepper
+#      port: 8000
+#      user: "admin"                    # credentials are ignored by the bridge
+#      password: "admin"
+#      # autotracking:                  # optional, experimental
+#      #   enabled: true
+#      #   track: [ person ]
+#      #   zooming: disabled
 
   # Bottom camera (mouth) — direct V4L2 capture, no PTZ
   pepper_bottom:
@@ -63,7 +64,7 @@ cameras:
 # Optional: smooth low-latency live view (WebRTC/MSE) via Frigate's built-in go2rtc
 go2rtc:
   streams:
-    pepper_head:
-      - rtsp://pepper:8554/head
+#    pepper_head:
+#      - rtsp://pepper:8554/head
     pepper_bottom:
       - rtsp://pepper:8554/bottom
