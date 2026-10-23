@@ -59,7 +59,7 @@ ssh pepper 'cd ~/halloween && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packa
 # Déclencher une fois tout de suite (test), puis le script s'arrête
 #   ... python2 halloween.py --test
 # Options : --dist 1.5 (seuil m), --volume 85, --cooldown 5 (s après un BOUH),
-#           --phrase "Trick or treat!" (dite après le rire)
+#           --dialogue-max 330 (s, durée max d'une rencontre avec Gemini Live)
 #           --no-alarm, --alarm-tilt 8 (deg), --alarm-debug, --test-alarm
 
 # Désarmer la sirène anti-vol (ré-armement 30 s plus tard)
@@ -124,10 +124,11 @@ Au lancement, il faut ~15 s avant « fantome en place » : c'est le `wakeUp()`.
      (3 étapes : écarter l'épaule, bras horizontal, épaules tournées vers
      l'avant) a été essayée, puis abandonnée après essai sous le drap : on est
      revenu au mouvement d'origine.
-   - attend la fin du rire, puis dit **« Trick or treat! »** en synthèse vocale
-     anglaise (`ALTextToSpeech`, balises `\\vct=60\\ \\rspd=75\\` : voix grave et lente ;
-     phrase réglable avec `--phrase`), rétablit le volume, revient en attente en 3 s,
-     LED éteintes, pause de 5 s.
+   - attend la fin du rire, revient en attente en 3 s ; si le PC du dialogue
+     est connecté, Gemini Live salue l'enfant (« Bonsoir, je suis Casper le
+     fantôme… ») et le fantôme attend la fin de la rencontre (voir « Sur le
+     robot »). Puis il rétablit le volume, LED éteintes, pause de 5 s.
+     (« Trick or treat! » en synthèse anglaise a été supprimé le 2026-10-23.)
 
 ## Alarme anti-vol (`antivol.py`)
 
@@ -160,7 +161,7 @@ Testée sur le robot le 2026-10-18. Elle démarre avec le fantôme, sauf `--no-a
   roues tournent un peu (jusqu'à 3,7) car le robot oscille.
 - Alarme : coupe tout son en cours, **sirène en boucle** (`playFileInLoop`,
   volume 100), yeux et épaules en **gyrophare rouge/bleu**. Le fantôme ne fait
-  plus rien (ni BOUH ni « Trick or treat ») tant que la sirène sonne.
+  plus rien (ni BOUH ni dialogue) tant que la sirène sonne.
 - **Désarmement** : `touch ~/halloween/desarme`. La sirène s'arrête, les LED
   s'éteignent, nouvelle référence et ré-armement **30 s** plus tard (le temps de
   remettre le robot en place). Un fichier `desarme` présent quand rien ne sonne
@@ -213,7 +214,7 @@ redescendre » noté plus tôt (pas un embrayage).
 - Conséquence : les bras ne s'arrêtent plus si quelqu'un est tout près pendant
   le BOUH. La protection des déplacements (« Move ») reste active.
 
-## Dialogue avec les enfants (`../dialogue/`) — prêt, pas encore testé sur le robot
+## Dialogue avec les enfants (`../dialogue/`) — Gemini Live sur le robot, en test depuis le 2026-10-23
 
 But : parler avec les enfants. Le micro USB écoute, la transcription passe le
 texte au LLM, la synthèse vocale répond. Les micros internes du robot ne
@@ -367,15 +368,95 @@ WSL par `dialogue/live_windows.sh`.
 contrôle sur le texte, mais plus lent). Il a aussi reçu un mode `--local` (son
 du PC via WSLg, qui hache) et l'accueil au démarrage.
 
-**Pour le robot (prochaine étape)** : `robot_audio.py` joue des fichiers WAV
-entiers (`ALAudioPlayer.playFile`). Il faut le passer en **lecture continue**
-pour Gemini Live : recevoir des morceaux PCM 24 kHz, les empiler dans une file
-et les jouer en flux. Pistes : `aplay`/`pacat` vers la sortie PulseAudio
-`speaker`, ou `ALAudioDevice.sendRemoteBufferToOutput`. Il faut aussi une
-commande de vidage pour les interruptions, et que le robot dise quand il a fini
-de parler (pour rouvrir le micro). `live.py` aura alors besoin d'un mode robot,
-qui se connecte au port 8090 comme `dialogue.py`. L'accueil devra être déclenché
-par le lidar avant (quelqu'un arrive).
+### Sur le robot (2026-10-23)
+
+**Chaîne** : le fantôme (`halloween.py`) fait son BOUH, puis Gemini Live
+(`live.py --robot`, sur le PC) parle avec l'enfant par le micro USB et le
+haut-parleur du robot, via le pont audio `robot_audio.py`. « Trick or treat »
+a été supprimé.
+
+```bash
+# Sur le robot : le pont audio (avant ou après le fantôme)
+scp dialogue/robot_audio.py pepper:dialogue/
+ssh pepper 'cd ~/dialogue && PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages setsid nohup python2 -u robot_audio.py > bridge.log 2>&1 < /dev/null &'
+# Sur le PC (sous WSL : pas de son local, donc pas besoin de Windows)
+cd dialogue && uv run --script live.py --robot pepper      # --gain 8 par défaut
+```
+
+**Déroulé d'une rencontre** (échange par ALMemory) :
+1. Au début du BOUH, si un PC est connecté (`Halloween/DialoguePC` = 1), le
+   fantôme écrit `Halloween/Dialogue` = `prepare` : le PC ouvre une session
+   Gemini pendant le rire (~2 s de connexion, cachées par les 11 s du rire).
+2. À la fin du rire : `talk`. Le pont répond `active`, le PC envoie la consigne
+   `HELLO` et Pepper dit « Bonsoir, je suis Casper le fantôme, as-tu des choses
+   à me dire ? » (premier son ~1 s après).
+3. Dialogue. Le robot remplace son micro par du silence pendant qu'il parle
+   (+0,4 s) et signale la fin de sa parole (`quiet`).
+4. Après 20 s sans voix ni parole (ou 5 min), le PC ferme la session et envoie
+   `end` ; le pont repasse à `idle` une fois la voix finie. Le fantôme relâche
+   la tête, revient au repos et se ré-arme. Sirène pendant le dialogue : le
+   fantôme écrit `abort`, la voix est coupée.
+5. Sans PC connecté, le fantôme fait seulement son BOUH.
+
+**Pont audio (`robot_audio.py`)** : messages encadrés dans les deux sens
+(4 octets de longueur, en-tête JSON, données ; détail en tête du fichier).
+- Voix de Gemini : PCM 24 kHz en continu, empilé dans une file, joué par
+  `pacat -d speaker --latency-msec=150` (PulseAudio du robot). L'heure de fin
+  de la voix est calculée d'après les octets reçus ; `flush` tue `pacat`.
+- `dialogue.py` a été adapté au nouveau format (il ignore les messages autres
+  que le micro).
+
+**Volume du micro** : la voix arrive très faible au micro du robot (RMS 300 à
+1300 sur 32768, bruit de fond ~65), alors que le volume de capture du
+ReSpeaker est déjà au maximum (`numid=9`, 127/128). Gemini comprenait mal
+(« Un peu mouillé sur la gauche ») et laissait des phrases sans réponse.
+`live.py` applique un **gain logiciel ×8** (`--gain`) avant Gemini.
+
+**Panne USB du micro (2026-10-23, 17:29)** : le noyau signalait
+`usb 1-4: usb_set_interface failed (-71)` et `arecord` échouait
+(« Unable to install hw params »). Une réinitialisation logicielle
+(`/sys/bus/usb/devices/1-4/authorized`) a échoué (`can't set config #1, error
+-71`) : il a fallu **débrancher et rebrancher** le ReSpeaker. Les caméras, sur
+le même contrôleur, ont aussi des erreurs `-71` (dès le démarrage) : liaison
+USB fragile. La panne est survenue en ouvrant le micro pendant que la lecture
+HID tournait (sans preuve que ce soit la cause) : le pont n'ouvre plus la
+lecture HID qu'après le micro.
+
+### Direction de la voix : ReSpeaker Mic Array v1 (`2886:0007`)
+
+C'est la **première** Mic Array de Seeed (puce XMOS XVSM-2000, liaison USB
+« full speed »), pas la v2.0 : l'outil `tuning.py` de la v2.0 (registre
+`DOAANGLE`) ne s'applique pas. La direction passe par son interface **HID**
+(`/dev/hidraw0`, interface 4 ; l'appareil se retrouve en cherchant
+`00002886:00000007` dans `/sys/class/hidraw/hidraw*/device/uevent`).
+
+Rapports reçus en lisant `/dev/hidraw0` (décodés par essais, sans
+documentation) :
+
+| Octets | Sens |
+|---|---|
+| `02 80 02 00` | envoyé en continu (~toutes les 7 ms), ne varie pas : rien d'utile |
+| `ff ff 03 00` `V` `A0 A1` | détection de voix : `V` = 2 au **début** d'une voix, 0 à la **fin** ; angle = `A0 + 256·A1` en degrés |
+
+- L'angle n'est donné **qu'au début et à la fin** de chaque voix, pas en
+  continu. Pour en avoir un à chaque position, il faut se taire puis reparler.
+- Pas de **30°**. **0° = devant le robot, croissant vers sa gauche** (90 =
+  gauche, 180 = derrière, 270 = droite), comme `HeadYaw` : un angle `a` donne
+  `HeadYaw = a` si `a ≤ 180`, sinon `a − 360`. Relevé en tournant autour du
+  robot : devant 0, avant gauche 60, gauche 90, arrière gauche 150, derrière
+  180, arrière droite 210, droite 270, avant droite 300–330.
+- Mesures parasites isolées (échos, toux, autre personne) : quelques 30° ou
+  240° au milieu d'un tour. Une source à 210° (arrière droite) revient souvent
+  sans que personne n'y parle.
+- `/dev/hidraw0` appartient à root (`crw------- root root`) : le pont lance un
+  petit lecteur avec `sudo -n python2 -c ...`.
+
+**Utilisation** : pendant un dialogue, la tête se tourne vers la dernière voix
+dont le début a été repéré (`HeadYaw`, `HeadPitch` 0), **seulement quand Gemini
+a transcrit des mots** (`heard` envoyé par le PC) : une toux ou un bruit sans
+parole ne la fait pas tourner. Voix ignorée si elle vient de derrière (plus de
+110° de côté), si elle a plus de 4 s, ou si elle a commencé pendant que Pepper
+parlait (sa propre voix).
 
 ## Trouvailles importantes
 

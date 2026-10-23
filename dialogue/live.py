@@ -10,10 +10,16 @@ phrase et répond directement en voix (24 kHz), jouée au fil de l'arrivée.
 
   Modèle : gemini-live-2.5-flash-native-audio (Vertex AI, europe-west4)
 
-Pour l'instant : micro et haut-parleurs du PC. À lancer **sous Windows** : la
-sortie son de WSLg hache et se bloque (voir STATUT_HALLOWEEN.md). Sous Windows
-le son passe par sounddevice (PortAudio) ; la sortie lit une file remplie au fil
-de l'arrivée, ce qui donne aussi l'instant exact où Pepper finit de parler.
+Deux modes :
+- micro et haut-parleurs du PC (par défaut). À lancer **sous Windows** : la
+  sortie son de WSLg hache et se bloque (voir STATUT_HALLOWEEN.md). Sous Windows
+  le son passe par sounddevice (PortAudio) ; la sortie lit une file remplie au
+  fil de l'arrivée, ce qui donne aussi l'instant exact où Pepper finit de parler.
+- --robot : micro USB et haut-parleur du robot, via son pont audio
+  (robot_audio.py, port 8090). Une session Gemini par enfant : le fantôme
+  (halloween.py) la demande pendant son BOUH, la salutation part à la fin du
+  rire, et la rencontre se termine après IDLE s sans voix ni parole. Pas de son
+  sur le PC : marche aussi sous WSL.
 
 Pendant que Pepper parle, le micro est remplacé par du silence (sinon, avec des
 haut-parleurs, il s'entend et se coupe lui-même) ; --barge-in le désactive
@@ -21,17 +27,25 @@ haut-parleurs, il s'entend et se coupe lui-même) ; --barge-in le désactive
 
 Lancer depuis WSL (Python et son de Windows, identifiants Google de WSL) :
   ./live_windows.sh --prompt ../halloween/preprompt_dialogue.txt
+Avec le robot (depuis WSL) :
+  uv run --script live.py --robot pepper
 Directement sous Windows :
   uv run --script live.py --prompt ..\\halloween\\preprompt_dialogue.txt
 """
 import argparse
 import asyncio
+import json
 import os
+import socket
+import struct
 import threading
 import time
 
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except OSError:                  # pas de PortAudio (WSL) : seul --robot marche
+    sd = None
 from google import genai
 from google.genai import types
 
@@ -41,12 +55,18 @@ MODEL = "gemini-live-2.5-flash-native-audio"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PROMPT = os.path.join(HERE, "..", "halloween", "preprompt_dialogue.txt")
 HELLO = ("(Consigne, ce n'est pas un enfant qui parle : un enfant vient d'arriver devant "
-         "toi. Salue-le et engage la conversation, en une ou deux phrases.)")
+         "toi et tu viens de lui faire « Bouh » avec un rire de fantôme. Dis-lui "
+         "exactement : « Bonsoir, je suis Casper le fantôme, as-tu des choses à me dire ? »)")
 IN_RATE = 16000
 OUT_RATE = 24000
 CHUNK = 1600                     # 100 ms de micro à 16 kHz
 TAIL = 0.4                       # micro coupé encore TAIL s après la fin de la parole
-SPEECH_RMS = 500                 # au-dessus : quelqu'un parle (pour mesurer la latence)
+SPEECH_RMS = 500                 # au-dessus : quelqu'un parle (micro du PC)
+ROBOT_SPEECH_RMS = 250           # idem, micro du robot avant gain (fond ~65)
+IDLE = 20.0                      # robot : fin de la rencontre après IDLE s de calme
+MAX_TALK = 300.0                 # robot : durée max d'une rencontre (s)
+ROBOT_PORT = 8090
+ROBOT_GAIN = 8.0                 # micro du robot très faible (parole vers -35 dBFS)
 
 
 def log(msg):
@@ -93,14 +113,59 @@ class Speaker:
             pending = len(self.buf)
         return pending > 0 or time.time() < self.last_sound + TAIL + self.stream.latency
 
+    def heard(self):
+        pass
+
     def flush(self):
         """Coupe net (l'enfant a interrompu Pepper)."""
         with self.lock:
             self.buf.clear()
 
 
+class RobotLink:
+    """Pont audio du robot (robot_audio.py) : micro, haut-parleur, signaux du fantôme.
+
+    Même interface que Speaker pour la voix ; c'est le robot qui remplace son
+    micro par du silence quand il parle, et qui signale la fin ("quiet").
+    """
+    underruns = 0
+
+    def __init__(self, host, port):
+        self.host, self.port = host, port
+
+    async def connect(self):
+        self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+        self.writer.get_extra_info("socket").setsockopt(
+            socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    async def frames(self):
+        while True:
+            n = struct.unpack(">I", await self.reader.readexactly(4))[0]
+            head = json.loads(await self.reader.readexactly(n))
+            yield head, await self.reader.readexactly(head.get("size", 0))
+
+    def send(self, cmd, data=b""):
+        h = json.dumps({"cmd": cmd, "size": len(data)}).encode()
+        self.writer.write(struct.pack(">I", len(h)) + h + data)
+
+    def write(self, pcm):
+        self.send("pcm", pcm)
+
+    def flush(self):
+        self.send("flush")
+
+    def heard(self):
+        """Des mots de l'enfant ont été transcrits : le robot regarde d'où vient la voix."""
+        self.send("heard")
+
+    def speaking(self):
+        return False
+
+
 class Live:
-    def __init__(self, system, voice, barge_in, mic_device, out_device):
+    def __init__(self, system, voice, barge_in, gain=ROBOT_GAIN):
+        self.gain = gain
+        self.speech_rms = SPEECH_RMS
         self.client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
         self.config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -116,10 +181,11 @@ class Live:
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
                     silence_duration_ms=500)))
         self.barge_in = barge_in
-        self.mic_device = mic_device
-        self.speaker = Speaker(out_device)
+        self.speaker = None          # Speaker (PC) ou RobotLink
         self.last_voice = 0.0        # dernier morceau de micro avec de la voix
+        self.last_activity = 0.0     # voix de l'enfant ou de Pepper
         self.heard = ""
+        self.heard_at = 0.0          # dernier morceau de transcription de l'enfant
         self.said = ""
         self.first_audio = None
         logs = os.path.join(HERE, "logs")
@@ -135,25 +201,17 @@ class Live:
             self.transcript.write("%s %s : %s\n" % (time.strftime("%H:%M:%S"), who, text))
             self.transcript.flush()
 
-    async def mic(self, session):
-        loop = asyncio.get_running_loop()
-        q = asyncio.Queue()
-
-        def callback(indata, frames, time_info, status):
-            loop.call_soon_threadsafe(q.put_nowait, bytes(indata))
-
-        with sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16",
-                               blocksize=CHUNK, device=self.mic_device, callback=callback):
-            while True:
-                data = await q.get()
-                if not self.barge_in and self.speaker.speaking():
-                    data = b"\0" * len(data)
-                else:
-                    x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                    if np.sqrt(np.mean(x * x)) > SPEECH_RMS:
-                        self.last_voice = time.time()
-                await session.send_realtime_input(
-                    audio=types.Blob(data=data, mime_type="audio/pcm;rate=%d" % IN_RATE))
+    async def mic(self, session, q):
+        while True:
+            data = await q.get()
+            if not self.barge_in and self.speaker.speaking():
+                data = b"\0" * len(data)
+            else:
+                x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                if np.sqrt(np.mean(x * x)) > self.speech_rms:
+                    self.last_voice = self.last_activity = time.time()
+            await session.send_realtime_input(
+                audio=types.Blob(data=data, mime_type="audio/pcm;rate=%d" % IN_RATE))
 
     async def receive(self, session):
         while True:
@@ -165,6 +223,9 @@ class Live:
                     continue
                 if sc.input_transcription and sc.input_transcription.text:
                     self.heard += sc.input_transcription.text
+                    self.heard_at = time.time()
+                    if any(c.isalpha() for c in sc.input_transcription.text):
+                        self.speaker.heard()
                 if sc.output_transcription and sc.output_transcription.text:
                     self.said += sc.output_transcription.text
                 if sc.model_turn:
@@ -178,6 +239,7 @@ class Live:
                                     log("   latence : %.1f s après la fin de la voix"
                                         % (self.first_audio - self.last_voice))
                             self.speaker.write(p.inline_data.data)
+                            self.last_activity = time.time()
                 if sc.interrupted:
                     log("   (interrompu)")
                     self.speaker.flush()
@@ -189,15 +251,115 @@ class Live:
                     self.said = ""
                     self.first_audio = None
 
-    async def run(self):
+    async def talk(self, session, q, idle=False):
+        """Salue l'enfant puis dialogue ; avec idle, s'arrête quand c'est calme."""
+        self.heard = self.said = ""
+        self.heard_at = 0.0
+        self.first_audio = None
+        self.last_activity = time.time()
+        await session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=HELLO)]),
+            turn_complete=True)
+        tasks = [asyncio.create_task(self.mic(session, q)),
+                 asyncio.create_task(self.receive(session))]
+        if idle:
+            tasks.append(asyncio.create_task(self.watchdog()))
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                t.result()           # fait remonter une erreur
+        finally:
+            for t in tasks:
+                t.cancel()
+
+    async def watchdog(self):
+        start = time.time()
+        while True:
+            await asyncio.sleep(0.5)
+            now = time.time()
+            if self.heard_at and self.first_audio is None and now - self.heard_at > 4:
+                if self.heard.strip():
+                    log("   entendu, sans réponse : %s" % self.heard.strip())
+                self.heard_at = 0.0
+            if now - self.last_activity > IDLE:
+                log("   (plus personne depuis %.0f s)" % IDLE)
+                return
+            if now - start > MAX_TALK:
+                log("   (rencontre trop longue)")
+                return
+
+    async def run_local(self, mic_device, out_device):
+        self.speaker = Speaker(out_device)
+        loop = asyncio.get_running_loop()
+        q = asyncio.Queue()
+
+        def callback(indata, frames, time_info, status):
+            loop.call_soon_threadsafe(q.put_nowait, bytes(indata))
+
         async with self.client.aio.live.connect(model=MODEL, config=self.config) as session:
             log("connecté à %s, j'écoute (Ctrl+C pour arrêter)" % MODEL)
-            log("   micro : %s" % sd.query_devices(self.mic_device, "input")["name"])
+            log("   micro : %s" % sd.query_devices(mic_device, "input")["name"])
             log("   sortie : %s" % sd.query_devices(self.speaker.stream.device)["name"])
-            await session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(text=HELLO)]),
-                turn_complete=True)
-            await asyncio.gather(self.mic(session), self.receive(session))
+            with sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16",
+                                   blocksize=CHUNK, device=mic_device, callback=callback):
+                await self.talk(session, q)
+
+    async def run_robot(self, host, port):
+        """Reste connecté au robot : se reconnecte s'il redémarre son pont audio."""
+        while True:
+            try:
+                await self.serve_robot(host, port)
+            except (asyncio.IncompleteReadError, OSError) as e:
+                log("robot déconnecté (%s), nouvel essai dans 3 s" % e.__class__.__name__)
+            await asyncio.sleep(3)
+
+    async def serve_robot(self, host, port):
+        link = self.speaker = RobotLink(host, port)
+        self.speech_rms = ROBOT_SPEECH_RMS * self.gain
+        await link.connect()
+        log("connecté au robot %s:%d, en attente d'un enfant (Ctrl+C pour arrêter)"
+            % (host, port))
+        task = q = go = None
+        async for head, data in link.frames():
+            if task and task.done():
+                task = None
+            cmd = head.get("cmd")
+            if cmd == "mic":
+                if go and go.is_set():
+                    x = np.frombuffer(data, dtype=np.int16).astype(np.float32) * self.gain
+                    q.put_nowait(np.clip(x, -32768, 32767).astype(np.int16).tobytes())
+            elif cmd == "quiet":
+                self.last_activity = time.time()
+                if task:
+                    log("   (le robot a fini de parler)")
+            elif cmd == "event":
+                name = head.get("name")
+                log("   (fantôme : %s)" % name)
+                if name in ("prepare", "talk") and task is None:
+                    q, go = asyncio.Queue(), asyncio.Event()
+                    task = asyncio.create_task(self.encounter(link, q, go))
+                if name == "talk":
+                    go.set()
+                elif name == "abort" and task:
+                    task.cancel()
+
+    async def encounter(self, link, q, go):
+        """Une rencontre avec un enfant : une session Gemini, fermée à la fin."""
+        try:
+            async with self.client.aio.live.connect(model=MODEL, config=self.config) as session:
+                log("nouvel enfant : connecté à %s" % MODEL)
+                await asyncio.wait_for(go.wait(), 30)
+                await self.talk(session, q, idle=True)
+        except TimeoutError:
+            log("   (pas de signal du fantôme)")
+        except Exception as e:
+            log("   erreur : %s" % e)
+        finally:
+            link.send("end")
+            log("fin de la rencontre")
+            if self.transcript:
+                self.transcript.write("---\n")
+                self.transcript.flush()
 
 
 def main():
@@ -206,6 +368,10 @@ def main():
     p.add_argument("--voice", default="Leda", help="Leda, Aoede, Kore, Puck, Charon...")
     p.add_argument("--barge-in", action="store_true",
                    help="micro ouvert pendant que Pepper parle (avec un casque)")
+    p.add_argument("--robot", metavar="HÔTE[:PORT]",
+                   help="micro et haut-parleur du robot (pont robot_audio.py)")
+    p.add_argument("--gain", type=float, default=ROBOT_GAIN,
+                   help="--robot : gain appliqué au micro du robot (%(default)s)")
     p.add_argument("--mic", help="numéro ou nom du micro (--list pour les voir)")
     p.add_argument("--out", help="numéro ou nom de la sortie son")
     p.add_argument("--list", action="store_true", help="liste les périphériques son")
@@ -216,8 +382,14 @@ def main():
     dev = lambda d: int(d) if d and d.isdigit() else d
     with open(args.prompt, encoding="utf-8") as f:
         system = f.read()
+    live = Live(system, args.voice, args.barge_in, args.gain)
+    if args.robot:
+        host, _, port = args.robot.partition(":")
+        run = live.run_robot(host, int(port or ROBOT_PORT))
+    else:
+        run = live.run_local(dev(args.mic), dev(args.out))
     try:
-        asyncio.run(Live(system, args.voice, args.barge_in, dev(args.mic), dev(args.out)).run())
+        asyncio.run(run)
     except KeyboardInterrupt:
         pass
 

@@ -90,11 +90,23 @@ class RobotLink:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.lock = threading.Lock()
 
+    def _exact(self, n):
+        buf = b""
+        while len(buf) < n:
+            part = self.sock.recv(n - len(buf))
+            if not part:
+                raise EOFError("robot déconnecté")
+            buf += part
+        return buf
+
     def read(self):
-        data = self.sock.recv(CHUNK)
-        if not data:
-            raise EOFError("robot déconnecté")
-        return data
+        """Prochain morceau de micro (les autres messages du robot sont ignorés)."""
+        while True:
+            n = struct.unpack(">I", self._exact(4))[0]
+            head = json.loads(self._exact(n))
+            data = self._exact(head.get("size", 0))
+            if head.get("cmd") == "mic":
+                return data
 
     def send(self, head, data=b""):
         head = dict(head, size=len(data))

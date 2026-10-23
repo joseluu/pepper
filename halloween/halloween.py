@@ -5,13 +5,16 @@
 # Attente : buste a demi penche, tete relachee, toutes LED eteintes, les doigts
 # bougent un peu en permanence (petit mouvement pour le watchdog d'inactivite).
 # Quelqu'un s'approche a moins de 1.5 m devant (lidars du pied) : LED rouges,
-# il se redresse vite, leve les bras et joue le rire de Thriller. Puis il
-# revient au repos et se re-arme.
+# il se redresse vite, leve les bras et joue le rire de Thriller. Puis, si le
+# PC du dialogue est connecte (dialogue/robot_audio.py + live.py --robot), il
+# laisse Gemini Live parler avec l'enfant ; il revient au repos et se re-arme
+# a la fin de la rencontre.
 #
 # Lancement sur le robot :
 #   PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 halloween.py
 # Options : --test (declenche une fois tout de suite), --volume N, --dist M,
-#   --no-alarm, --alarm-tilt DEG, --alarm-debug, --alarm-siren S, --test-alarm (voir antivol.py)
+#   --no-alarm, --alarm-tilt DEG, --alarm-debug, --alarm-siren S, --test-alarm (voir antivol.py),
+#   --dialogue-max S
 import sys, os, time, math, argparse
 
 sys.stdout = sys.stderr  # qi ecrit ses [W] sur stdout
@@ -65,6 +68,9 @@ MIN_SEGMENTS = 2     # nombre de segments concernes pour declencher
 CONFIRM = 2          # lectures consecutives pour declencher
 BASELINE_ALPHA = 0.02  # adaptation lente du fond (objets immobiles)
 
+DIALOGUE = "Halloween/Dialogue"      # echange avec dialogue/robot_audio.py
+DIALOGUE_PC = "Halloween/DialoguePC"
+
 
 def log(msg):
     os.write(2, "%s %s\n" % (time.strftime("%H:%M:%S"), msg))
@@ -77,7 +83,6 @@ class Ghost(object):
         self.motion = session.service("ALMotion")
         self.leds = session.service("ALLeds")
         self.player = session.service("ALAudioPlayer")
-        self.tts = session.service("ALTextToSpeech")
         self.audio = session.service("ALAudioDevice")
         self.session = session
         self.baseline = None
@@ -183,6 +188,9 @@ class Ghost(object):
 
     def scare(self):
         log("BOUH !")
+        talk = not self.alarm_active() and self.dialogue_ready()
+        if talk:   # le PC se connecte a Gemini pendant le rire
+            self.mem.insertData(DIALOGUE, "prepare")
         if self.alarm:
             self.alarm.reset_peaks()  # pour calibrer : ce que le BOUH secoue
         self.motion.setStiffnesses("Head", 1.0)
@@ -208,18 +216,49 @@ class Ghost(object):
             time.sleep(0.9)
         self.motion.setAngles("HipRoll", 0.0, 0.10)
         play.wait()
-        if not self.alarm_active():
-            # voix grave (vct) et lente (rspd), en pourcentage de la normale
-            self.tts.setLanguage("English")
-            self.tts.say("\\vct=60\\ \\rspd=75\\ " + self.args.phrase)
-            self.audio.setOutputVolume(old_vol)
+        if talk:
+            talk = not self.alarm_active()
+            self.mem.insertData(DIALOGUE, "talk" if talk else "abort")
         self.go_rest(3.0)
+        if talk:
+            self.wait_dialogue()
+            self.go_rest(2.0)   # la tete a pu suivre l'enfant : la relacher
+        if not self.alarm_active():
+            self.audio.setOutputVolume(old_vol)
         if self.alarm:
             p = self.alarm.peaks
             log("secousse du BOUH (base) : inclinaison %.1f deg, ecart acc %.2f, "
                 "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
         time.sleep(self.args.cooldown)
         self.baseline = None  # le fond peut avoir change (gens, drap)
+
+    def dialogue_ready(self):
+        try:
+            return bool(self.mem.getData(DIALOGUE_PC))
+        except Exception:      # pont audio jamais lance
+            return False
+
+    def wait_dialogue(self):
+        """Attend la fin de la rencontre : le pont audio repasse a "idle"."""
+        log("dialogue avec l'enfant")
+        t0 = time.time()
+        while True:
+            state = self.mem.getData(DIALOGUE)
+            if state == "idle":
+                break
+            now = time.time()
+            if state == "talk" and now - t0 > 5:
+                log("le pont audio ne repond pas")
+                self.mem.insertData(DIALOGUE, "idle")
+                break
+            if self.alarm_active() or now - t0 > self.args.dialogue_max:
+                log("dialogue interrompu")
+                self.mem.insertData(DIALOGUE, "abort")
+                break
+            self.mem.insertData("Halloween/Ghost", int(now))   # lu par web.py
+            self.wiggle_fingers()
+            time.sleep(0.2)
+        log("fin du dialogue (%.0f s)" % (time.time() - t0))
 
     def alarm_active(self):
         return self.alarm is not None and self.alarm.active
@@ -269,7 +308,8 @@ def main():
     p.add_argument("--volume", type=int, default=85)
     p.add_argument("--dist", type=float, default=1.5)
     p.add_argument("--cooldown", type=float, default=5.0)
-    p.add_argument("--phrase", default="Trick or treat!")
+    p.add_argument("--dialogue-max", type=float, default=330.0,
+                   help="duree max d'une rencontre (s) avant de se re-armer")
     p.add_argument("--no-alarm", action="store_true", help="sans anti-vol")
     p.add_argument("--alarm-tilt", type=float, default=8.0,
                    help="inclinaison (deg) qui declenche la sirene")
