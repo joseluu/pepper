@@ -14,7 +14,8 @@
 #   PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 halloween.py
 # Options : --test (declenche une fois tout de suite), --volume N, --dist M,
 #   --no-alarm, --alarm-tilt DEG, --alarm-debug, --alarm-siren S, --test-alarm (voir antivol.py),
-#   --dialogue-max S
+#   --dialogue-max S, --greet (variante de test : quelqu'un arrive -> dialogue
+#   direct, sans BOUH d'accueil ; le BOUH reste possible si l'enfant le demande)
 import sys, os, time, math, argparse
 
 sys.stdout = sys.stderr  # qi ecrit ses [W] sur stdout
@@ -53,6 +54,9 @@ SCARE = {
     "RShoulderPitch": -0.35, "RShoulderRoll": -0.52, "RElbowYaw": 0.0,
     "RElbowRoll": 0.45, "RWristYaw": 0.0, "RHand": 1.0,
 }
+# Dialogue apres un BOUH redemande par l'enfant : on reste droit, bras le
+# long du corps, tete tenue a l'horizontale (elle suit ensuite la voix).
+TALK = dict(REST, HeadPitch=0.0, HipPitch=-0.03, KneePitch=0.0)
 SHOULDER_PITCH = -0.35
 ARM_WAVE = 0.087  # +/- 5 deg de ShoulderPitch, bras en opposition de phase
 HIP_SWAY = 0.087  # +/- 5 deg de HipRoll pendant le rire
@@ -70,6 +74,7 @@ BASELINE_ALPHA = 0.02  # adaptation lente du fond (objets immobiles)
 
 DIALOGUE = "Halloween/Dialogue"      # echange avec dialogue/robot_audio.py
 DIALOGUE_PC = "Halloween/DialoguePC"
+DIALOGUE_MODE = "Halloween/DialogueMode"   # "boo" (apres un BOUH) ou "greet"
 
 
 def log(msg):
@@ -155,6 +160,12 @@ class Ghost(object):
         self.motion.setAngles("HipRoll", self.motion.getAngles("HipRoll", True)[0], 0.05)
         self.leds_off()
 
+    def go_talk(self, duration=2.0):
+        """Posture droite pour continuer a parler apres un BOUH redemande."""
+        self.motion.setStiffnesses("Head", 1.0)
+        self.move(TALK, duration)
+        self.leds_off()
+
     def wiggle_fingers(self):
         now = time.time()
         if now - self.last_finger < 2.0:
@@ -190,6 +201,7 @@ class Ghost(object):
         log("BOUH !")
         talk = not self.alarm_active() and self.dialogue_ready()
         if talk:   # le PC se connecte a Gemini pendant le rire
+            self.mem.insertData(DIALOGUE_MODE, "boo")
             self.mem.insertData(DIALOGUE, "prepare")
         if self.alarm:
             self.alarm.reset_peaks()  # pour calibrer : ce que le BOUH secoue
@@ -211,6 +223,24 @@ class Ghost(object):
                 "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
         time.sleep(self.args.cooldown)
         self.baseline = None  # le fond peut avoir change (gens, drap)
+
+    def greet(self):
+        """Variante --greet : dialogue des que quelqu'un arrive, sans BOUH."""
+        log("quelqu'un arrive : dialogue sans BOUH")
+        self.mem.insertData(DIALOGUE_MODE, "greet")
+        self.mem.insertData(DIALOGUE, "prepare")
+        old_vol = self.audio.getOutputVolume()
+        self.audio.setOutputVolume(self.args.volume)
+        # tete tenue, vers l'avant : elle suivra ensuite la voix de l'enfant
+        self.motion.setStiffnesses("Head", 1.0)
+        self.motion.setAngles(["HeadYaw", "HeadPitch"], [0.0, 0.0], 0.15)
+        self.mem.insertData(DIALOGUE, "talk")
+        self.wait_dialogue()
+        self.go_rest(2.0)
+        if not self.alarm_active():
+            self.audio.setOutputVolume(old_vol)
+        time.sleep(self.args.cooldown)
+        self.baseline = None
 
     def boo(self):
         """Le geste : yeux rouges, redressement, bras leves, rire de Thriller."""
@@ -258,7 +288,7 @@ class Ghost(object):
             if state == "scare":    # l'enfant a demande de refaire peur
                 log("BOUH redemande pendant le dialogue")
                 self.boo()
-                self.go_rest(3.0)
+                self.go_talk(2.0)
                 self.mem.insertData(DIALOGUE, "active")
                 continue
             if self.alarm_active() or now - t0 > self.args.dialogue_max:
@@ -306,7 +336,10 @@ class Ghost(object):
                     self.go_rest()
             if self.detect():
                 self.mem.insertData("Halloween/LastScare", int(time.time()))
-                self.scare()
+                if self.args.greet and self.dialogue_ready():
+                    self.greet()
+                else:
+                    self.scare()
             else:
                 self.wiggle_fingers()
             time.sleep(0.1)
@@ -320,6 +353,8 @@ def main():
     p.add_argument("--cooldown", type=float, default=5.0)
     p.add_argument("--dialogue-max", type=float, default=330.0,
                    help="duree max d'une rencontre (s) avant de se re-armer")
+    p.add_argument("--greet", action="store_true",
+                   help="test : dialogue direct a l'arrivee, sans BOUH d'accueil")
     p.add_argument("--no-alarm", action="store_true", help="sans anti-vol")
     p.add_argument("--alarm-tilt", type=float, default=8.0,
                    help="inclinaison (deg) qui declenche la sirene")

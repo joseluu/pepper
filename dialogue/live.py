@@ -58,6 +58,12 @@ DEFAULT_PROMPT = os.path.join(HERE, "..", "halloween", "preprompt_dialogue.txt")
 HELLO = ("(Consigne, ce n'est pas un enfant qui parle : un enfant vient d'arriver devant "
          "toi et tu viens de lui faire « Bouh » avec un rire de fantôme. Dis-lui "
          "exactement : « Bonsoir, je suis Casper le fantôme, as-tu des choses à me dire ? »)")
+HELLO_GREET = ("(Consigne, ce n'est pas un enfant qui parle : un enfant vient d'arriver "
+               "devant toi. Dis-lui exactement : « Bonsoir, je suis Casper le fantôme, "
+               "as-tu des choses à me dire ? »)")
+GOODBYE = ("(Consigne, ce n'est pas un enfant qui parle : l'enfant ne répond plus, il est "
+           "sans doute parti. Dis-lui au revoir en une phrase courte, par exemple "
+           "« Joyeux Halloween ! Va vite chercher tes bonbons ! »)")
 IN_RATE = 16000
 OUT_RATE = 24000
 CHUNK = 1600                     # 100 ms de micro à 16 kHz
@@ -65,7 +71,7 @@ TAIL = 0.4                       # micro coupé encore TAIL s après la fin de l
 SPEECH_RMS = 500                 # au-dessus : quelqu'un parle (micro du PC)
 ROBOT_SPEECH_RMS = 250           # idem, micro du robot avant gain (fond ~65)
 IDLE = 20.0                      # robot : fin de la rencontre après IDLE s de calme
-RELAUNCH = 7.0                   # robot : relance après RELAUNCH s de silence de l'enfant
+RELAUNCH = 10.0                  # robot : relance après RELAUNCH s de silence de l'enfant
 MAX_RELAUNCH = 2                 # relances au plus par rencontre
 RELAUNCH_TEXT = ("(Consigne, ce n'est pas un enfant qui parle : l'enfant ne dit plus rien. "
                  "Relance-le en lui demandant exactement : « En quoi es-tu déguisé ? ». "
@@ -86,7 +92,8 @@ ASK_SCARE = re.compile(r"\b(re)?fai(s|tes|re)\b.{0,15}(peur|fant[ôo]me|bouh|cri
                        r"|encore|recommence|bouh|\bcri\b", re.I)
 MAX_TALK = 300.0                 # robot : durée max d'une rencontre (s)
 ROBOT_PORT = 8090
-ROBOT_GAIN = 8.0                 # micro du robot très faible (parole vers -35 dBFS)
+ROBOT_GAIN = 20.0                # micro du robot très faible (parole vers -35 dBFS à
+                                 # 50 cm, bien moins à 2 m) ; écrêtage doux au-delà
 
 
 def log(msg):
@@ -209,6 +216,7 @@ class Live:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
                     silence_duration_ms=500)),
             tools=[SCARE_TOOL])
@@ -239,7 +247,10 @@ class Live:
     async def mic(self, session, q):
         while True:
             data = await q.get()
-            if not self.barge_in and self.speaker.speaking():
+            if not self.greeted.is_set():
+                # les voix de la pièce ne doivent pas couper la salutation
+                data = b"\0" * len(data)
+            elif not self.barge_in and self.speaker.speaking():
                 data = b"\0" * len(data)
             else:
                 x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
@@ -285,6 +296,7 @@ class Live:
                     log("   (interrompu)")
                     self.speaker.flush()
                 if sc.turn_complete or sc.interrupted:
+                    self.greeted.set()
                     self.note("Pepper", self.said)
                     if self.speaker.underruns:
                         log("   (sortie son : %d manques de données)" % self.speaker.underruns)
@@ -317,15 +329,16 @@ class Live:
         await session.send_tool_response(function_responses=[
             types.FunctionResponse(id=fc.id, name=fc.name, response=result)])
 
-    async def talk(self, session, q, idle=False):
+    async def talk(self, session, q, idle=False, hello=HELLO):
         """Salue l'enfant puis dialogue ; avec idle, s'arrête quand c'est calme."""
         self.heard = self.said = ""
         self.heard_at = 0.0
         self.last_child = ""
+        self.greeted = asyncio.Event()
         self.first_audio = None
         self.last_activity = time.time()
         await session.send_client_content(
-            turns=types.Content(role="user", parts=[types.Part(text=HELLO)]),
+            turns=types.Content(role="user", parts=[types.Part(text=hello)]),
             turn_complete=True)
         tasks = [asyncio.create_task(self.mic(session, q)),
                  asyncio.create_task(self.receive(session))]
@@ -355,7 +368,8 @@ class Live:
                     log("   entendu, sans réponse : %s" % self.heard.strip())
                 self.heard_at = 0.0
             if (now - self.last_activity > RELAUNCH and relaunches < MAX_RELAUNCH
-                    and relaunched_at != self.last_activity):
+                    and relaunched_at != self.last_activity
+                    and now - self.last_voice > 2):    # pas pendant qu'on parle
                 relaunches += 1
                 relaunched_at = self.last_activity
                 log("   (silence : relance)")
@@ -364,9 +378,22 @@ class Live:
                     turn_complete=True)
             if now - self.last_activity > IDLE:
                 log("   (plus personne depuis %.0f s)" % IDLE)
-                return
+                return await self.goodbye(session)
             if now - start > MAX_TALK:
                 log("   (rencontre trop longue)")
+                return await self.goodbye(session)
+
+    async def goodbye(self, session):
+        """Pepper dit au revoir, puis on attend que le robot ait fini de parler."""
+        await session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=GOODBYE)]),
+            turn_complete=True)
+        started = False
+        for _ in range(75):          # 15 s au plus
+            await asyncio.sleep(0.2)
+            if self.speaker.talking:
+                started = True
+            elif started:
                 return
 
     async def run_local(self, mic_device, out_device):
@@ -408,7 +435,8 @@ class Live:
             if cmd == "mic":
                 if go and go.is_set():
                     x = np.frombuffer(data, dtype=np.int16).astype(np.float32) * self.gain
-                    q.put_nowait(np.clip(x, -32768, 32767).astype(np.int16).tobytes())
+                    x = 32767 * np.tanh(x / 32767)      # écrêtage doux
+                    q.put_nowait(x.astype(np.int16).tobytes())
             elif cmd == "quiet":
                 link.talking = False
                 self.last_activity = time.time()
@@ -421,19 +449,20 @@ class Live:
                     link.scared.set()
                 if name in ("prepare", "talk") and task is None:
                     q, go = asyncio.Queue(), asyncio.Event()
-                    task = asyncio.create_task(self.encounter(link, q, go))
+                    hello = HELLO_GREET if head.get("mode") == "greet" else HELLO
+                    task = asyncio.create_task(self.encounter(link, q, go, hello))
                 if name == "talk":
                     go.set()
                 elif name == "abort" and task:
                     task.cancel()
 
-    async def encounter(self, link, q, go):
+    async def encounter(self, link, q, go, hello):
         """Une rencontre avec un enfant : une session Gemini, fermée à la fin."""
         try:
             async with self.client.aio.live.connect(model=MODEL, config=self.config) as session:
                 log("nouvel enfant : connecté à %s" % MODEL)
                 await asyncio.wait_for(go.wait(), 30)
-                await self.talk(session, q, idle=True)
+                await self.talk(session, q, idle=True, hello=hello)
         except TimeoutError:
             log("   (pas de signal du fantôme)")
         except Exception as e:

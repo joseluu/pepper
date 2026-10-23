@@ -19,7 +19,8 @@
 #     {"cmd": "event", "name": E}   signal du fantome (halloween.py) :
 #                                   "prepare" (BOUH en cours), "talk" (fin du
 #                                   rire : saluer l'enfant), "abort" (sirene),
-#                                   "scared" (BOUH redemande : fini)
+#                                   "scared" (BOUH redemande : fini) ;
+#                                   "mode" : "boo" (apres un BOUH) ou "greet"
 #   PC -> robot :
 #     {"cmd": "pcm", "size": N}     voix en continu, PCM 16 bits mono 24 kHz
 #     {"cmd": "flush"}              coupe net la voix en cours (interruption)
@@ -303,7 +304,11 @@ class Bridge(object):
             self.state = state
             if state in ("prepare", "talk", "abort"):
                 self.log("fantome : %s" % state)
-                self.send({"cmd": "event", "name": state})
+                try:    # "boo" : apres un BOUH ; "greet" : accueil sans BOUH
+                    mode = self.mem.getData("Halloween/DialogueMode")
+                except Exception:
+                    mode = "boo"
+                self.send({"cmd": "event", "name": state, "mode": mode})
             if state == "talk":
                 self.ending = False
                 self.set_state("active")
