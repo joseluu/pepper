@@ -178,7 +178,14 @@ class RobotLink:
 
     async def frames(self):
         while True:
-            n = struct.unpack(">I", await self.reader.readexactly(4))[0]
+            # le pont envoie le micro sans arrêt : un silence de 10 s veut dire
+            # que le robot a redémarré sans fermer la connexion (sinon on
+            # attendrait indéfiniment sur une connexion morte)
+            try:
+                head4 = await asyncio.wait_for(self.reader.readexactly(4), 10)
+            except asyncio.TimeoutError:
+                raise ConnectionError("rien reçu du robot depuis 10 s")
+            n = struct.unpack(">I", head4)[0]
             head = json.loads(await self.reader.readexactly(n))
             yield head, await self.reader.readexactly(head.get("size", 0))
 
