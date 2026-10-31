@@ -69,6 +69,17 @@ plus de 15 s est ignoré ; boutons inactifs pendant la sirène) :
 | Dodo | posture d'attente | arrête le dialogue, posture d'attente |
 | Parle | dialogue sans BOUH (accueil « greet »), si tram est connecté | relance : arrête la session Gemini et en ouvre une neuve |
 
+Carte **Micro** de la page : niveau du micro après gain (dBFS, mis à jour
+5 fois par s, trait blanc = crête des 2 dernières s) et seuil de voix (trait
+rouge). Réglages appliqués tout de suite par `live.py` sur tram (via le pont
+audio) et gardés dans `~/halloween/micro.json` :
+- **gain** (x20 par défaut) : amplification du micro avant Gemini ;
+- **seuil** (-16 dBFS après gain par défaut) : au-dessus = voix, ce qui empêche
+  les relances pendant que l'enfant parle ;
+- **couper le son sous le seuil** (non par défaut) : porte de bruit, Gemini
+  n'entend que ce qui dépasse le seuil (maintien 1 s). Utile si les
+  conversations de la pièce déclenchent des réponses.
+
 ### Dialogue sur tram (2026-10-23)
 
 - Code : clone partiel du dépôt dans `~/pepper` sur tram
