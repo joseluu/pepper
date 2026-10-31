@@ -10,12 +10,18 @@
 # le fichier ~/halloween/desarme, comme `touch ~/halloween/desarme`.
 # Les boutons du fantome (tiens-toi droit, bouh, dodo, parle) ecrivent
 # Halloween/Command, que halloween.py execute (accuse dans CommandAck).
+# Carte Micro : niveau lu dans Halloween/MicLevel (pont audio, 10 fois par s),
+# reglages [gain, seuil dBFS apres gain, porte] ecrits dans
+# Halloween/MicSettings (le pont les passe a live.py sur tram) et gardes dans
+# ~/halloween/micro.json pour le prochain demarrage.
 import os, json, math, time, argparse, threading
 import BaseHTTPServer, SocketServer
 import qi
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DISARM_FILE = os.path.join(HERE, "desarme")
+MIC_FILE = os.path.join(HERE, "micro.json")
+MIC_DEFAULT = [20.0, -16.0, 0]   # = live.py : gain x20, seuil 250 x 20 avant gain
 
 SEG = "Device/SubDeviceList/Platform/LaserSensor/Front/Horizontal/Seg%02d/"
 LASER_KEYS = []
@@ -47,6 +53,16 @@ button { width:100%; padding:16px; font-size:1.2em; border:0; border-radius:10px
 button:disabled { background:#444; color:#888; }
 .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
 .grid button { background:#5c6bc0; padding:14px 8px; }
+#meter { position:relative; height:28px; background:#333; border-radius:6px;
+         margin:10px 0 4px; overflow:hidden; }
+#lvl { position:absolute; left:0; top:0; bottom:0; width:0; background:var(--green);
+       transition:width .1s; }
+#lvl.loud { background:var(--amber); }
+#thrm { position:absolute; top:0; bottom:0; width:3px; background:var(--red); }
+#peak { position:absolute; top:0; bottom:0; width:2px; background:#fff; opacity:.7; }
+.set { display:flex; align-items:center; gap:10px; margin-top:10px; }
+.set label { width:4.5em; } .set input[type=range] { flex:1; }
+.set span { width:5.5em; text-align:right; }
 .ok { color:var(--green); } .warn { color:var(--amber); } .bad { color:var(--red); }
 </style></head><body>
 <h1>Fantôme de Pepper</h1>
@@ -62,6 +78,22 @@ button:disabled { background:#444; color:#888; }
     <span class="big" id="min">…</span></div>
   <div id="bars"></div>
   <div class="row mut"><span>gauche</span><span>vu par le robot · seuil BOUH <span id="thr"></span> m (rouge)</span><span>droite</span></div>
+</div>
+
+<div class="card">
+  <div class="row"><span>Micro (après gain)</span><span class="big" id="mdb">…</span></div>
+  <div id="meter"><div id="lvl"></div><div id="peak"></div><div id="thrm"></div></div>
+  <div class="row mut"><span>-70 dBFS</span><span>seuil de voix (rouge)</span><span>0</span></div>
+  <div class="set"><label>Gain</label>
+    <input id="gain" type="range" min="1" max="60" step="1" oninput="mic(true)">
+    <span id="gainv"></span></div>
+  <div class="set"><label>Seuil</label>
+    <input id="thr2" type="range" min="-60" max="0" step="1" oninput="mic(true)">
+    <span id="thrv"></span></div>
+  <div class="set"><label><input id="gate" type="checkbox" onchange="mic(true)"></label>
+    <span style="width:auto;text-align:left">couper le son sous le seuil
+    (Gemini n'entend que ce qui dépasse, 1 s de maintien)</span></div>
+  <div id="micd" class="mut"></div>
 </div>
 
 <div class="card">
@@ -159,7 +191,51 @@ function disarm() {
   document.getElementById("stop").disabled = true;
   fetch("disarm", {method: "POST"}).then(refresh);
 }
+// --- micro ---
+var MIN = -70, cfg = null, timer = null, peak = MIN, peakT = 0;
+function pos(db) { return Math.max(0, Math.min(100, 100 * (db - MIN) / -MIN)); }
+function mic(changed) {
+  var g = +document.getElementById("gain").value,
+      t = +document.getElementById("thr2").value,
+      o = document.getElementById("gate").checked ? 1 : 0;
+  document.getElementById("gainv").textContent = "x" + g;
+  document.getElementById("thrv").textContent = t + " dBFS";
+  document.getElementById("thrm").style.left = pos(t) + "%";
+  cfg = [g, t, o];
+  if (!changed) return;
+  clearTimeout(timer);    // envoi apres 300 ms sans mouvement du curseur
+  timer = setTimeout(function () {
+    fetch("micro", {method: "POST", body: JSON.stringify(cfg)});
+  }, 300);
+}
+function level() {
+  fetch("level").then(function (r) { return r.json(); }).then(function (m) {
+    if (!cfg) {
+      document.getElementById("gain").value = m.settings[0];
+      document.getElementById("thr2").value = m.settings[1];
+      document.getElementById("gate").checked = !!m.settings[2];
+      mic(false);
+    }
+    var d = document.getElementById("micd"), lvl = document.getElementById("lvl");
+    if (m.raw == null || m.age > 2) {
+      lvl.style.width = "0"; set("mdb", "—", "");
+      d.textContent = "micro arrêté (tram non connecté au robot)";
+      return;
+    }
+    var rms = Math.min(32767, m.raw * cfg[0]);
+    var db = 20 * Math.log(Math.max(rms, 1) / 32768) / Math.LN10;
+    lvl.style.width = pos(db) + "%";
+    lvl.className = db > cfg[1] ? "loud" : "";
+    var now = Date.now();
+    if (db > peak || now - peakT > 2000) { peak = db; peakT = now; }
+    document.getElementById("peak").style.left = pos(peak) + "%";
+    set("mdb", db.toFixed(0) + " dBFS", db > cfg[1] ? "warn" : "");
+    d.textContent = "brut " + m.raw + " (fond ~65) · " +
+      (db > cfg[1] ? "voix" : "sous le seuil");
+  }).catch(function () {});
+}
 refresh(); setInterval(refresh, 1000);
+level(); setInterval(level, 200);
 </script></body></html>"""
 
 
@@ -182,6 +258,35 @@ class State(object):
             return mem.getData(key)
         except Exception:
             return default
+
+    def mic_init(self):
+        try:
+            v = json.load(open(MIC_FILE))
+        except Exception:
+            v = MIC_DEFAULT
+        self.mic_set(v, save=False)
+
+    def mic_set(self, v, save=True):
+        v = [min(max(float(v[0]), 1.0), 60.0), min(max(float(v[1]), -60.0), 0.0),
+             1 if v[2] else 0]
+        with self.lock:
+            self.mem().insertData("Halloween/MicSettings", v)
+        if save:
+            with open(MIC_FILE, "w") as f:
+                json.dump(v, f)
+        return v
+
+    def level(self):
+        with self.lock:
+            m = self.mem()
+            lv = self.get(m, "Halloween/MicLevel")
+            st = self.get(m, "Halloween/MicSettings")
+        if st is None:      # NAOqi a redemarre : remettre les reglages gardes
+            self.mic_init()
+            st = self.get(self.mem(), "Halloween/MicSettings", MIC_DEFAULT)
+        return {"raw": lv[0] if lv else None,
+                "age": time.time() - lv[1] if lv else None,
+                "settings": st}
 
     def command(self, name):
         with self.lock:
@@ -232,6 +337,11 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self.send(200, PAGE, "text/html; charset=utf-8")
+        elif self.path == "/level":
+            try:
+                self.send(200, json.dumps(self.state.level()), "application/json")
+            except Exception as e:
+                self.send(503, json.dumps({"error": str(e)}), "application/json")
         elif self.path == "/status":
             try:
                 self.send(200, json.dumps(self.state.status()), "application/json")
@@ -241,7 +351,14 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.send(404, "introuvable", "text/plain")
 
     def do_POST(self):
-        if self.path == "/disarm":
+        if self.path == "/micro":
+            try:
+                n = int(self.headers.getheader("Content-Length") or 0)
+                v = self.state.mic_set(json.loads(self.rfile.read(n)))
+                self.send(200, json.dumps(v), "application/json")
+            except Exception as e:
+                self.send(400, json.dumps({"error": str(e)}), "application/json")
+        elif self.path == "/disarm":
             open(DISARM_FILE, "w").close()   # antivol.py arrete la sirene
             self.send(200, '{"ok": true}', "application/json")
         elif self.path in ("/cmd/droit", "/cmd/bouh", "/cmd/dodo", "/cmd/parle"):
@@ -254,7 +371,7 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.send(404, "introuvable", "text/plain")
 
     def log_message(self, fmt, *args):
-        if "/status" not in (args[0] if args else ""):
+        if not any(p in (args[0] if args else "") for p in ("/status", "/level")):
             os.write(2, "%s [web] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
 
@@ -269,6 +386,10 @@ def main():
     p.add_argument("--dist", type=float, default=1.5, help="seuil BOUH affiche")
     args = p.parse_args()
     Handler.state = State(args.dist)
+    try:
+        Handler.state.mic_init()
+    except Exception as e:     # NAOqi pas encore pret : reglages par defaut
+        os.write(2, "%s [web] reglages micro : %s\n" % (time.strftime("%H:%M:%S"), e))
     srv = Server(("", args.port), Handler)
     os.write(2, "%s [web] http://pepper:%d/\n"
              % (time.strftime("%H:%M:%S"), args.port))

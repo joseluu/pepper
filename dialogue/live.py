@@ -94,6 +94,7 @@ ASK_SCARE = re.compile(r"\b(re)?fai(s|tes|re)\b.{0,15}(peur|fant[ôo]me|bouh|cri
                        r"|encore|recommence|bouh|\bcri\b", re.I)
 MAX_TALK = 300.0                 # robot : durée max d'une rencontre (s)
 ROBOT_PORT = 8090
+GATE_HOLD = 1.0                  # s : la porte reste ouverte après la voix
 ROBOT_GAIN = 20.0                # micro du robot très faible (parole vers -35 dBFS à
                                  # 50 cm, bien moins à 2 m) ; écrêtage doux au-delà
 
@@ -215,6 +216,7 @@ class Live:
     def __init__(self, system, voice, barge_in, gain=ROBOT_GAIN):
         self.gain = gain
         self.speech_rms = SPEECH_RMS
+        self.gate = False            # couper le micro sous le seuil (page web du robot)
         self.client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
         self.config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -267,6 +269,8 @@ class Live:
                 x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                 if np.sqrt(np.mean(x * x)) > self.speech_rms:
                     self.last_voice = time.time()
+                elif self.gate and time.time() - self.last_voice > GATE_HOLD:
+                    data = b"\0" * len(data)   # sous le seuil : Gemini n'entend rien
             await session.send_realtime_input(
                 audio=types.Blob(data=data, mime_type="audio/pcm;rate=%d" % IN_RATE))
 
@@ -470,6 +474,12 @@ class Live:
                     x = np.frombuffer(data, dtype=np.int16).astype(np.float32) * self.gain
                     x = 32767 * np.tanh(x / 32767)      # écrêtage doux
                     q.put_nowait(x.astype(np.int16).tobytes())
+            elif cmd == "config":       # réglages de la page web du robot
+                self.gain = float(head["gain"])
+                self.speech_rms = 32768 * 10 ** (float(head["threshold"]) / 20)
+                self.gate = bool(head["gate"])
+                log("   (micro : gain x%.0f, seuil %.0f dBFS, porte %s)"
+                    % (self.gain, head["threshold"], "oui" if self.gate else "non"))
             elif cmd == "quiet":
                 link.talking = False
                 self.last_activity = time.time()

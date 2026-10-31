@@ -16,6 +16,11 @@
 #                                   en continu (100 ms). Pendant que le robot
 #                                   parle, du silence (il ne s'entend pas).
 #     {"cmd": "quiet"}              le robot vient de finir de parler
+#     {"cmd": "config", "gain": G, "threshold": T, "gate": 0|1}
+#                                   reglages du micro de la page web (web.py,
+#                                   Halloween/MicSettings) : gain, seuil de voix
+#                                   en dBFS apres gain, couper sous le seuil ;
+#                                   envoye a la connexion et a chaque changement
 #     {"cmd": "event", "name": E}   signal du fantome (halloween.py) :
 #                                   "prepare" (BOUH en cours), "talk" (fin du
 #                                   rire : saluer l'enfant), "abort" (sirene),
@@ -42,6 +47,8 @@
 #                         "abort" (fantome) -> "idle" ;
 #                         "active" -> "scare" (ecrit ici) -> "active" (fantome,
 #                         une fois le BOUH fini)
+#   Halloween/MicLevel    [RMS brut du micro (avant gain), heure], 10 fois par s
+#   Halloween/MicSettings [gain, seuil dBFS, porte] (ecrit par web.py)
 #
 # Direction de la voix : le ReSpeaker (premiere Mic Array, 2886:0007) envoie
 # par HID, au debut et a la fin de chaque voix, un rapport
@@ -49,7 +56,7 @@
 # en degres par pas de 30 : 0 = devant le robot, croissant vers sa gauche
 # (90 = gauche, 180 = derriere), comme HeadYaw. /dev/hidraw* est reserve a
 # root : un petit lecteur tourne avec sudo.
-import os, json, math, time, struct, socket, argparse, threading, subprocess, Queue
+import os, json, math, time, audioop, struct, socket, argparse, threading, subprocess, Queue
 import qi
 
 MIC = "plughw:UAC20,0"          # ReSpeaker Mic Array (carte UAC20)
@@ -62,6 +69,8 @@ PLAY_FILE = "/tmp/dialogue_say.wav"
 LAUGH = os.path.expanduser("~/halloween/thriller_laugh.wav")
 KEY = "Halloween/Dialogue"
 PC_KEY = "Halloween/DialoguePC"
+LEVEL_KEY = "Halloween/MicLevel"
+SETTINGS_KEY = "Halloween/MicSettings"
 LOOK_MAX = 110                  # au-dela (deg), voix de derriere : ignoree
 LOOK_AGE = 4.0                  # une voix plus ancienne (s) n'est plus visee
 
@@ -334,6 +343,7 @@ class Bridge(object):
         threading.Thread(target=self.commands, args=(conn,)).start()
         silence = b"\x00" * CHUNK * 2
         was_busy = False
+        settings, n = None, 0
         try:
             while True:
                 data = rec.stdout.read(CHUNK * 2)
@@ -345,6 +355,17 @@ class Bridge(object):
                     # survenue en ouvrant le micro pendant la lecture HID
                     self.doa = Doa(self)
                 busy = self.busy()
+                self.mem.insertData(LEVEL_KEY, [audioop.rms(data, 2), int(time.time())])
+                n += 1
+                if n % 5 == 1:      # reglages de la page web, 2 fois par s
+                    try:
+                        s = self.mem.getData(SETTINGS_KEY)
+                    except Exception:
+                        s = None
+                    if s and s != settings:
+                        settings = s
+                        self.send({"cmd": "config", "gain": s[0], "threshold": s[1],
+                                   "gate": s[2]})
                 self.send({"cmd": "mic"}, silence if busy else data)
                 if was_busy and not busy:
                     self.send({"cmd": "quiet"})
