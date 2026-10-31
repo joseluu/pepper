@@ -22,7 +22,7 @@ Pepper, sous un drap blanc, dehors et immobile, joue le fantôme :
 | Mouvement BOUH | ✅ bras tendus par devant à 110°, paumes vers le sol (validé), coudes arrondis (validé), bras écartés de 30° + bras haut/bas en opposition (validé) |
 | LED | ✅ yeux + épaules en rouge ; oreilles éteintes (choix de l'utilisateur, elles n'ont que du bleu) |
 | Chauffe en attente | ⚠️ corrigée (tête relâchée, buste à demi penché), à surveiller sur une longue durée |
-| Démarrage automatique au boot | ❌ pas installé : il faut le lancer à la main (voir plus bas) |
+| Démarrage automatique au boot | ✅ services utilisateur de `nao` : fantôme, pont audio, page web (voir plus bas) |
 | Alarme anti-vol (sirène) | ✅ testée sur le robot le 2026-10-18 : déclenche quand on le porte (même à plat), pas quand on le fait rouler, pivoter ou passer un seuil, ni pendant un BOUH |
 | Connexion | ✅ WiFi seul suffit (`ssh pepper`) ; câble réseau et tablette débranchés |
 
@@ -39,7 +39,7 @@ Dans le dépôt (`halloween/`) et sur le robot (`/home/nao/halloween/`) :
 | `siren.wav` | Sirène de police « wail » synthétisée (6 s, boucle sans coupure) |
 | `make_siren.py` | Régénère `siren.wav` (Python 3, sur le PC) |
 | `simu_antivol.py` | Simulation hors robot de la détection anti-vol (Python 3) |
-| `web.py` | Page d'état sur http://pepper:8080/ : lidar avant, batterie, état de l'alarme, bouton « Arrêter la sirène » (stdlib, pas de Flask sur le robot) |
+| `web.py` | Page de contrôle sur http://pepper:8080/ : lidar avant, batterie, état de l'alarme et du dialogue, bouton « Arrêter la sirène », boutons du fantôme (stdlib, pas de Flask sur le robot) |
 | `record_imu.py` | Enregistre centrale de la base + roues + pare-chocs en CSV (`python2 record_imu.py f.csv 180`, fantôme arrêté) |
 | `TODO.md` | Plan de test de l'alarme anti-vol |
 | `run.log` (robot seulement) | Journal du programme (détections, BOUH) |
@@ -49,14 +49,25 @@ l'installation dans `~/halloween`.
 
 ## Démarrage automatique (2026-10-23)
 
-Au démarrage du robot, deux **services utilisateur** de `nao` lancent le pont
-audio du dialogue puis le fantôme (`halloween/systemd/`, installés dans
+Au démarrage du robot, trois **services utilisateur** de `nao` lancent le pont
+audio du dialogue, le fantôme et la page web (port 8080) (`halloween/systemd/`, installés dans
 `~/.config/systemd/user/`). Chacun attend d'abord que NAOqi réponde
 (`wait_naoqi.py`, plusieurs minutes après l'allumage). Le dialogue Gemini Live
 (`live.py --robot pepper`, voix Puck) tourne **sur tram**, en service permanent
 qui se reconnecte au robot : le PC n'est plus nécessaire. Sans `live.py`
 connecté, le fantôme fait seulement son BOUH. Rallumage testé le 2026-10-23 :
 fantôme armé ~1 min 20 après le retour du réseau.
+
+Boutons du fantôme sur la page web (ordre écrit dans `Halloween/Command`,
+exécuté par `halloween.py`, accusé dans `Halloween/CommandAck` ; un ordre de
+plus de 15 s est ignoré ; boutons inactifs pendant la sirène) :
+
+| Bouton | Hors dialogue | Pendant un dialogue |
+|---|---|---|
+| Tiens-toi droit | réveille le robot s'il s'est mis au repos et le met en posture droite (jusqu'à la prochaine rencontre ou « Dodo ») | redresse le robot, le dialogue continue |
+| Bouh | BOUH complet, suivi du dialogue si tram est connecté | arrête le dialogue et refait une rencontre depuis le BOUH |
+| Dodo | posture d'attente | arrête le dialogue, posture d'attente |
+| Parle | dialogue sans BOUH (accueil « greet »), si tram est connecté | relance : arrête la session Gemini et en ouvre une neuve |
 
 ### Dialogue sur tram (2026-10-23)
 
@@ -81,11 +92,11 @@ fantôme armé ~1 min 20 après le retour du réseau.
 
 ```bash
 # Installer (une fois)
-scp halloween/wait_naoqi.py pepper:halloween/
-scp halloween/systemd/halloween.service halloween/systemd/halloween-dialogue.service pepper:.config/systemd/user/
-ssh pepper 'export XDG_RUNTIME_DIR=/run/user/1001; systemctl --user daemon-reload; systemctl --user enable halloween.service halloween-dialogue.service'
+scp halloween/wait_naoqi.py halloween/web.py pepper:halloween/
+scp halloween/systemd/halloween.service halloween/systemd/halloween-dialogue.service halloween/systemd/halloween-web.service pepper:.config/systemd/user/
+ssh pepper 'export XDG_RUNTIME_DIR=/run/user/1001; systemctl --user daemon-reload; systemctl --user enable halloween.service halloween-dialogue.service halloween-web.service'
 # État, arrêt, relance (sur le robot, avec XDG_RUNTIME_DIR=/run/user/1001)
-systemctl --user status halloween halloween-dialogue
+systemctl --user status halloween halloween-dialogue halloween-web
 systemctl --user stop halloween          # le fantôme
 systemctl --user restart halloween-dialogue
 ```

@@ -8,6 +8,8 @@
 # Etat lu dans ALMemory : Halloween/Ghost (battement de halloween.py),
 # Halloween/LastScare, Halloween/Alarm (antivol.py). Le bouton d'arret cree
 # le fichier ~/halloween/desarme, comme `touch ~/halloween/desarme`.
+# Les boutons du fantome (tiens-toi droit, bouh, dodo, parle) ecrivent
+# Halloween/Command, que halloween.py execute (accuse dans CommandAck).
 import os, json, math, time, argparse, threading
 import BaseHTTPServer, SocketServer
 import qi
@@ -43,6 +45,8 @@ h1 { font-size:1.3em; margin:0 0 12px; }
 button { width:100%; padding:16px; font-size:1.2em; border:0; border-radius:10px;
          background:var(--red); color:#fff; font-weight:600; }
 button:disabled { background:#444; color:#888; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
+.grid button { background:#5c6bc0; padding:14px 8px; }
 .ok { color:var(--green); } .warn { color:var(--amber); } .bad { color:var(--red); }
 </style></head><body>
 <h1>Fantôme de Pepper</h1>
@@ -68,6 +72,14 @@ button:disabled { background:#444; color:#888; }
 <div class="card">
   <div class="row"><span>Fantôme</span><span id="ghost">…</span></div>
   <div id="scare" class="mut"></div>
+  <div id="dlg" class="mut"></div>
+  <div class="grid">
+    <button class="cmd" onclick="order('droit')">Tiens-toi droit</button>
+    <button class="cmd" onclick="order('bouh')">Bouh</button>
+    <button class="cmd" onclick="order('dodo')">Dodo</button>
+    <button class="cmd" onclick="order('parle')">Parle</button>
+  </div>
+  <div id="ack" class="mut"></div>
 </div>
 <div id="err" class="mut"></div>
 
@@ -126,9 +138,22 @@ function refresh() {
     g.className = s.ghost_alive ? "ok" : "bad";
     document.getElementById("scare").textContent = "dernier BOUH : " +
       (s.last_scare == null ? "aucun" : "il y a " + ago(s.last_scare));
+    document.getElementById("dlg").textContent = "dialogue : " +
+      (!s.dialogue_pc ? "tram non connecté" :
+       (s.dialogue == "idle" || !s.dialogue ? "en attente" : "en cours (" + s.dialogue + ")"));
+    var off = !s.ghost_alive || (a && a.state == "sirene");
+    var cmds = document.querySelectorAll("button.cmd");
+    for (var j = 0; j < cmds.length; j++) cmds[j].disabled = off;
+    if (s.ack) document.getElementById("ack").textContent =
+      "dernier ordre exécuté : " + NAMES[s.ack.name] + " il y a " + ago(s.ack.age);
   }).catch(function (e) {
     document.getElementById("err").textContent = "robot injoignable (" + e + ")";
   });
+}
+var NAMES = {droit: "tiens-toi droit", bouh: "bouh", dodo: "dodo", parle: "parle"};
+function order(name) {
+  document.getElementById("ack").textContent = "ordre envoyé : " + NAMES[name] + "…";
+  fetch("cmd/" + name, {method: "POST"});
 }
 function disarm() {
   document.getElementById("stop").disabled = true;
@@ -158,6 +183,10 @@ class State(object):
         except Exception:
             return default
 
+    def command(self, name):
+        with self.lock:
+            self.mem().insertData("Halloween/Command", [name, int(time.time())])
+
     def status(self):
         with self.lock:
             m = self.mem()
@@ -167,6 +196,7 @@ class State(object):
             beat = self.get(m, "Halloween/Ghost")
             scare = self.get(m, "Halloween/LastScare")
             alarm = self.get(m, "Halloween/Alarm")
+            ack = self.get(m, "Halloween/CommandAck")
             # ALMemory : entiers 32 bits (les flottants y perdent la precision)
             alive = beat is not None and now - beat < 5
             return {
@@ -178,6 +208,9 @@ class State(object):
                 "batt_temp": self.get(m, BATT % "Temperature", 0.0),
                 "ghost_alive": alive,
                 "last_scare": now - scare if scare else None,
+                "dialogue": self.get(m, "Halloween/Dialogue"),
+                "dialogue_pc": bool(self.get(m, "Halloween/DialoguePC")),
+                "ack": {"name": ack[0], "age": now - ack[1]} if ack else None,
                 "alarm": {"state": alarm[0], "detail": alarm[1],
                           "age": now - alarm[2]} if (alive and alarm) else None,
             }
@@ -211,6 +244,12 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
         if self.path == "/disarm":
             open(DISARM_FILE, "w").close()   # antivol.py arrete la sirene
             self.send(200, '{"ok": true}', "application/json")
+        elif self.path in ("/cmd/droit", "/cmd/bouh", "/cmd/dodo", "/cmd/parle"):
+            try:
+                self.state.command(self.path[5:])
+                self.send(200, '{"ok": true}', "application/json")
+            except Exception as e:
+                self.send(503, json.dumps({"error": str(e)}), "application/json")
         else:
             self.send(404, "introuvable", "text/plain")
 

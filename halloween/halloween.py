@@ -75,6 +75,12 @@ BASELINE_ALPHA = 0.02  # adaptation lente du fond (objets immobiles)
 DIALOGUE = "Halloween/Dialogue"      # echange avec dialogue/robot_audio.py
 DIALOGUE_PC = "Halloween/DialoguePC"
 DIALOGUE_MODE = "Halloween/DialogueMode"   # "boo" (apres un BOUH) ou "greet"
+# Boutons de la page web (web.py) : [ordre, heure]. Ordres : "droit" (posture
+# droite), "bouh", "dodo" (posture d'attente, fin du dialogue), "parle"
+# (dialogue sans BOUH ; pendant un dialogue, le relance avec une session neuve).
+COMMAND = "Halloween/Command"
+COMMAND_ACK = "Halloween/CommandAck"     # [ordre, heure] execute, lu par web.py
+COMMAND_MAX_AGE = 15                     # s : un ordre plus vieux est ignore
 
 
 def log(msg):
@@ -96,6 +102,42 @@ class Ghost(object):
         self.last_finger = 0.0
         self.last_check = 0.0
         self.alarm = None
+        self.pending = None      # ordre web a executer apres la rencontre
+        cmd = self._get(COMMAND)
+        self.last_cmd = cmd[1] if cmd else 0   # pas d'ordre d'avant le demarrage
+
+    def _get(self, key):
+        try:
+            return self.mem.getData(key)
+        except Exception:
+            return None
+
+    def take_command(self):
+        """Ordre web nouveau et recent, sinon None."""
+        cmd = self._get(COMMAND)
+        if not cmd or cmd[1] <= self.last_cmd:
+            return None
+        self.last_cmd = cmd[1]
+        if time.time() - cmd[1] > COMMAND_MAX_AGE:
+            return None
+        log("ordre web : %s" % cmd[0])
+        self.mem.insertData(COMMAND_ACK, [cmd[0], int(time.time())])
+        return cmd[0]
+
+    def do_command(self, cmd):
+        """Hors dialogue."""
+        if cmd == "droit":
+            self.go_talk(2.0)
+        elif cmd == "dodo":
+            self.go_rest(2.0)
+        elif cmd == "bouh":
+            self.mem.insertData("Halloween/LastScare", int(time.time()))
+            self.scare()
+        elif cmd == "parle":
+            if self.dialogue_ready():
+                self.greet()
+            else:
+                log("parle : pas de dialogue (tram non connecte)")
 
     def _svc(self, name):
         try:
@@ -160,8 +202,16 @@ class Ghost(object):
         self.motion.setAngles("HipRoll", self.motion.getAngles("HipRoll", True)[0], 0.05)
         self.leds_off()
 
+    def end_encounter(self):
+        """Posture d'attente, sauf si un ordre web enchaine sur autre chose."""
+        if self.pending in ("bouh", "parle"):
+            return
+        self.go_rest(2.0)
+
     def go_talk(self, duration=2.0):
-        """Posture droite pour continuer a parler apres un BOUH redemande."""
+        """Posture droite pour parler (dialogue, bouton "tiens-toi droit")."""
+        if not self.motion.robotIsWakeUp():
+            self.motion.wakeUp()
         self.motion.setStiffnesses("Head", 1.0)
         self.move(TALK, duration)
         self.leds_off()
@@ -214,7 +264,7 @@ class Ghost(object):
         if talk:
             self.go_talk(2.0)   # reste droit pour parler avec l'enfant
             self.wait_dialogue()
-            self.go_rest(2.0)   # fin de la rencontre : posture d'attente
+            self.end_encounter()
         else:
             self.go_rest(3.0)
         if not self.alarm_active():
@@ -223,7 +273,8 @@ class Ghost(object):
             p = self.alarm.peaks
             log("secousse du BOUH (base) : inclinaison %.1f deg, ecart acc %.2f, "
                 "gyro %.2f" % (math.degrees(p[0]), p[1], p[2]))
-        time.sleep(self.args.cooldown)
+        if not self.pending:
+            time.sleep(self.args.cooldown)
         self.baseline = None  # le fond peut avoir change (gens, drap)
 
     def greet(self):
@@ -238,10 +289,11 @@ class Ghost(object):
         self.motion.setAngles(["HeadYaw", "HeadPitch"], [0.0, 0.0], 0.15)
         self.mem.insertData(DIALOGUE, "talk")
         self.wait_dialogue()
-        self.go_rest(2.0)
+        self.end_encounter()
         if not self.alarm_active():
             self.audio.setOutputVolume(old_vol)
-        time.sleep(self.args.cooldown)
+        if not self.pending:
+            time.sleep(self.args.cooldown)
         self.baseline = None
 
     def boo(self):
@@ -293,6 +345,17 @@ class Ghost(object):
                 self.go_talk(2.0)
                 self.mem.insertData(DIALOGUE, "active")
                 continue
+            cmd = self.take_command()
+            if cmd == "droit":
+                self.go_talk(2.0)
+            elif cmd:       # dodo, bouh, parle : fin de cette rencontre
+                log("dialogue arrete par la page web")
+                self.mem.insertData(DIALOGUE, "abort")
+                t1 = time.time()   # le pont audio repasse a "idle"
+                while self.mem.getData(DIALOGUE) != "idle" and time.time() - t1 < 3:
+                    time.sleep(0.1)
+                self.pending = cmd if cmd != "dodo" else None
+                break
             if self.alarm_active() or now - t0 > self.args.dialogue_max:
                 log("dialogue interrompu")
                 self.mem.insertData(DIALOGUE, "abort")
@@ -336,6 +399,12 @@ class Ghost(object):
                 if not self.motion.robotIsWakeUp():
                     log("robot passe au repos, je le reveille")
                     self.go_rest()
+            cmd = self.pending or self.take_command()
+            self.pending = None
+            if cmd:
+                self.do_command(cmd)
+                self.baseline = None
+                continue
             if self.detect():
                 self.mem.insertData("Halloween/LastScare", int(time.time()))
                 if self.args.greet and self.dialogue_ready():
