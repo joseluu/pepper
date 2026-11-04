@@ -1,0 +1,20 @@
+# Service UTILISATEUR de nao (~/.config/systemd/user/), comme ceux du fantome
+# (voir halloween/STATUT_HALLOWEEN.md, Demarrage automatique : /etc/systemd est
+# lu trop tard au demarrage). Exclusif avec les services halloween (meme port
+# 8090 pour le pont audio, 8080 pour la page). Installation : compagnie3po/README.md.
+[Unit]
+Description=Telecommande web de 3PO (port 8080)
+Conflicts=halloween-web.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nao/compagnie3po
+Environment=PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages
+ExecStartPre=/usr/bin/python2 /home/nao/halloween/wait_naoqi.py
+ExecStart=/bin/sh -c 'exec /usr/bin/python2 web3po.py >> web.log 2>&1'
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -40,7 +40,8 @@
 #     {"cmd": "eyes", "color": "0x0000ff"}  couleur des yeux
 #     {"cmd": "stop"}               coupe la parole en cours
 #
-# Avec le fantome, l'echange passe par ALMemory :
+# Avec le fantome, l'echange passe par ALMemory (prefixe Halloween/ ; 3PO/
+# pour l'esprit de compagnie, --prefix 3PO, meme protocole) :
 #   Halloween/DialoguePC  1 quand un PC est connecte
 #   Halloween/Dialogue    "idle" -> "prepare" -> "talk" (ecrits par le fantome)
 #                         -> "active" (ecrit ici) -> "idle" (apres "end"), ou
@@ -67,10 +68,23 @@ LATENCY = 0.15                  # tampon de pacat (s)
 TAIL = 0.4                      # silence garde apres la fin de la parole (s)
 PLAY_FILE = "/tmp/dialogue_say.wav"
 LAUGH = os.path.expanduser("~/halloween/thriller_laugh.wav")
-KEY = "Halloween/Dialogue"
-PC_KEY = "Halloween/DialoguePC"
-LEVEL_KEY = "Halloween/MicLevel"
-SETTINGS_KEY = "Halloween/MicSettings"
+# cles ALMemory, prefixe "Halloween" ou "3PO" (--prefix, esprit de compagnie)
+PREFIX = "Halloween"
+KEY = PC_KEY = LEVEL_KEY = SETTINGS_KEY = MODE_KEY = GHOST_KEY = None
+
+
+def set_prefix(prefix):
+    global PREFIX, KEY, PC_KEY, LEVEL_KEY, SETTINGS_KEY, MODE_KEY, GHOST_KEY
+    PREFIX = prefix
+    KEY = prefix + "/Dialogue"
+    PC_KEY = prefix + "/DialoguePC"
+    LEVEL_KEY = prefix + "/MicLevel"
+    SETTINGS_KEY = prefix + "/MicSettings"
+    MODE_KEY = prefix + "/DialogueMode"
+    GHOST_KEY = prefix + "/Ghost"
+
+
+set_prefix(PREFIX)
 LOOK_MAX = 110                  # au-dela (deg), voix de derriere : ignoree
 LOOK_AGE = 4.0                  # une voix plus ancienne (s) n'est plus visee
 
@@ -275,7 +289,7 @@ class Bridge(object):
 
     def ghost_alive(self):
         try:    # battement de halloween.py, toutes les 0,2 s pendant un dialogue
-            return time.time() - self.mem.getData("Halloween/Ghost") < 3
+            return time.time() - self.mem.getData(GHOST_KEY) < 3
         except Exception:
             return False
 
@@ -314,7 +328,7 @@ class Bridge(object):
             if state in ("prepare", "talk", "abort"):
                 self.log("fantome : %s" % state)
                 try:    # "boo" : apres un BOUH ; "greet" : accueil sans BOUH
-                    mode = self.mem.getData("Halloween/DialogueMode")
+                    mode = self.mem.getData(MODE_KEY)
                 except Exception:
                     mode = "boo"
                 self.send({"cmd": "event", "name": state, "mode": mode})
@@ -390,7 +404,10 @@ class Bridge(object):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=8090)
+    p.add_argument("--prefix", default="Halloween",
+                   help="prefixe des cles ALMemory (3PO : esprit de compagnie)")
     args = p.parse_args()
+    set_prefix(args.prefix)
     session = qi.Session()
     session.connect("tcp://127.0.0.1:9559")
     enable_capture()

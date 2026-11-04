@@ -1,0 +1,22 @@
+# Service UTILISATEUR sur tram : Gemini Live pour l'esprit de compagnie 3PO,
+# connecté au pont audio du robot (robot_audio.py --prefix 3PO, port 8090).
+# Exclusif avec pepper-dialogue (fantôme d'Halloween) : un seul client du pont.
+# Mêmes prérequis que dialogue/systemd/pepper-dialogue.service (clone dans
+# ~/pepper avec compagnie3po/ dans le sparse-checkout, uv, clé du compte de
+# service, linger). Installation : compagnie3po/README.md.
+[Unit]
+Description=Esprit de compagnie 3PO (Gemini Live <-> pont audio du robot)
+After=network-online.target
+Conflicts=pepper-dialogue.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pepper/compagnie3po
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/pepper-dialogue/sa.json
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/.local/bin/uv run --script live3po.py --robot pepper
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
