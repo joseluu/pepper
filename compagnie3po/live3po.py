@@ -10,8 +10,13 @@ dont il reprend le lien avec le robot (RobotLink) et les réglages du micro.
 
 Une session Gemini par période d'attention : compagnon.py (sur le robot) la
 demande quand on appuie sur « Écoute » dans la page web. 3PO ne parle pas en
-premier ; l'écoute proactive de Gemini le laisse se taire quand la
-conversation ne lui est pas adressée. Fin de l'écoute :
+premier. Gemini répond à chaque tour de parole : quand la conversation ne lui
+est pas adressée, il répond « (silence) » ; le son de chaque réponse est
+retenu jusqu'à ses premiers mots transcrits, et une réponse qui commence par
+une parenthèse n'est pas jouée. (L'écoute proactive de Gemini, --proactive,
+laisse le modèle se taire de lui-même, mais en essai il ignorait aussi des
+questions qui lui étaient adressées, et il ne transmet alors pas ce qu'il a
+entendu : ni « merci » ni les 60 s de calme ne se voient plus.) Fin de l'écoute :
 - « merci » ou « merci 3PO » : pause sans rien dire ;
 - IDLE s sans aucun mot entendu ni dit : « L'esprit de compagnie 3PO en
   pause. », puis pause ;
@@ -43,11 +48,12 @@ PAUSE_TEXT = ("(Consigne : personne ne parle plus. Dis exactement « L'esprit de
               "compagnie 3PO en pause. » et rien d'autre.)")
 THANKS_RE = re.compile(r"\bmerci\b", re.I)
 THANKS_WAIT = 1.2                # s de silence après « merci » avant la pause
+HOLD_MAX = 1.5 * 48000           # octets (1,5 s de voix) retenus au plus sans transcription
 MAX_RESUME = 3                   # reprises de session de suite sans succès
 
 
 class Companion:
-    def __init__(self, system, voice, gain=ROBOT_GAIN):
+    def __init__(self, system, voice, gain=ROBOT_GAIN, proactive=False):
         self.gain = gain
         self.speech_rms = ROBOT_SPEECH_RMS * gain
         self.gate = False            # couper le micro sous le seuil (page web)
@@ -67,7 +73,7 @@ class Companion:
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
                     silence_duration_ms=500)),
             # le modèle peut ne pas répondre à ce qui ne lui est pas adressé
-            proactivity=types.ProactivityConfig(proactive_audio=True),
+            proactivity=types.ProactivityConfig(proactive_audio=True) if proactive else None,
             # longues conversations : contexte glissant, reprise de session
             context_window_compression=types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow()))
@@ -81,6 +87,8 @@ class Companion:
         self.said = ""
         self.thanked = False
         self.first_audio = None
+        self.turn = None             # réponse en cours : None, "play" ou "mute"
+        self.held = bytearray()      # son retenu tant que la réponse n'est pas jugée
         logs = os.path.join(HERE, "logs")
         self.transcript = open(os.path.join(logs, time.strftime("3po-%Y%m%d-%H%M%S.txt")),
                                "a", encoding="utf-8") if os.path.isdir(logs) else None
@@ -126,6 +134,8 @@ class Companion:
                         self.thanked = True
                 if sc.output_transcription and sc.output_transcription.text:
                     self.said += sc.output_transcription.text
+                    if self.turn is None and self.said.strip():
+                        self.judge()
                 if sc.model_turn:
                     for p in sc.model_turn.parts:
                         if not (p.inline_data and p.inline_data.data):
@@ -134,16 +144,42 @@ class Companion:
                             self.first_audio = time.time()
                             self.note("Entendu", self.heard)
                             self.heard = ""
-                        if self.thanked:           # pas de « je vous en prie »
-                            continue
-                        self.speaker.write(p.inline_data.data)
-                        self.last_activity = time.time()
+                        if self.thanked or self.turn == "mute":
+                            continue               # pas de « je vous en prie »
+                        if self.turn == "play":
+                            self.play(p.inline_data.data)
+                        else:
+                            self.held += p.inline_data.data
+                            if len(self.held) > HOLD_MAX:   # pas de transcription
+                                self.turn = "play"
+                                self.play(b"")
                 if sc.interrupted:
                     self.speaker.flush()
                 if sc.turn_complete or sc.interrupted:
-                    self.note("3PO", self.said)
+                    if self.turn is None and self.held and not self.thanked \
+                            and not sc.interrupted:
+                        self.play(b"")             # réponse sans transcription
+                    self.note("3PO" if self.turn != "mute" else "3PO (muet)", self.said)
                     self.said = ""
                     self.first_audio = None
+                    self.turn = None
+                    self.held = bytearray()
+
+    def judge(self):
+        """Premiers mots de la réponse : « (silence) » ou une consigne
+        recopiée ne se prononcent pas ; le reste est joué."""
+        self.turn = "mute" if self.said.lstrip().startswith(("(", "[")) else "play"
+        if self.turn == "play" and not self.thanked:
+            self.play(b"")
+        else:
+            self.held = bytearray()
+
+    def play(self, pcm):
+        if self.held:
+            pcm, self.held = bytes(self.held) + pcm, bytearray()
+        if pcm:
+            self.speaker.write(pcm)
+            self.last_activity = time.time()
 
     async def watchdog(self, session):
         while True:
@@ -282,10 +318,12 @@ def main():
                    help="pont audio du robot (robot_audio.py --prefix 3PO)")
     p.add_argument("--gain", type=float, default=ROBOT_GAIN,
                    help="gain appliqué au micro du robot (%(default)s)")
+    p.add_argument("--proactive", action="store_true",
+                   help="écoute proactive de Gemini (il se tait de lui-même, voir plus haut)")
     args = p.parse_args()
     with open(args.prompt, encoding="utf-8") as f:
         system = f.read()
-    c = Companion(system, args.voice, args.gain)
+    c = Companion(system, args.voice, args.gain, args.proactive)
     host, _, port = args.robot.partition(":")
     try:
         asyncio.run(c.run_robot(host, int(port or ROBOT_PORT)))

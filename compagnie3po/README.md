@@ -21,11 +21,22 @@ les enfants et ses relances.
 | Bouton « Écoute » | chirp de 0,3 s (`chirp.wav`), yeux bleu pâle, session Gemini Live ouverte : 3PO écoute |
 | Question directe | réponse directe, une à trois phrases |
 | « Qu'en penses-tu ? », impression, sentiment | deux ou trois citations d'auteurs, puis son impression bâtie à partir d'elles |
-| Conversation qui ne lui est pas adressée | il se tait (écoute proactive de Gemini) |
+| Conversation qui ne lui est pas adressée | il se tait : Gemini répond « (silence) », qui n'est pas joué |
 | « merci », « merci 3PO » | pause, sans rien dire |
 | Bouton « Pause » | pause |
 | 60 s sans un mot entendu ni dit | « L'esprit de compagnie 3PO en pause. », puis pause |
 | Bouton « Tiens-toi droit » | reprend la posture droite (si NAOqi l'a mis au repos) |
+
+Il parle un français soutenu de la fin du dix-neuvième siècle, celui de
+Maupassant (vouvoiement, tournures un peu surannées).
+
+Gemini répond à chaque tour de parole ; `live3po.py` retient le son de chaque
+réponse jusqu'à ses premiers mots transcrits (un court délai) et ne joue pas
+une réponse qui commence par une parenthèse. L'écoute proactive de Gemini
+(`--proactive`), qui le laisserait se taire de lui-même, a été écartée : en
+essai, elle ignorait aussi des questions qui lui étaient adressées, et Gemini
+ne transmet alors pas ce qu'il a entendu (ni « merci » ni le calme ne se
+voient plus).
 
 Un mot entendu dans la pièce compte comme une interaction : tant qu'on parle
 près de lui, 3PO reste attentif. Une session Gemini Live dure une dizaine de
