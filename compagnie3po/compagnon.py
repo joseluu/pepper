@@ -31,21 +31,31 @@ import antivol
 
 CHIRP = os.path.join(HERE, "chirp.wav")
 
-# Debout droit. Hanches et genoux a 0 : le buste est a la verticale au-dessus
-# des roues, le moteur n'a presque rien a tenir (cf. halloween.py : 0 A a la
-# hanche). La tete est tenue a peu pres a l'horizontale ; les bras sont
-# poses le long du corps puis relaches (stiffness 0 : plus aucun courant).
-# Valeurs a affiner avec courants.py (courant mesure par articulation).
+# Debout droit, au plus econome (courants.py, 2026-11-04) : bras poses le long
+# du corps puis relaches (0,8 A -> 0) ; tete un peu baissee, a +0,10 rad
+# (6 deg) : 0 A, contre 0,17 A a -0,10 et 0,26 A a 0 ; hanches et genoux
+# droits, puis consigne = position reelle (le genou reste vers 0,05) :
+# jambes 2,3 -> 1,9 A. Se pencher (-0,20/0,10 comme le fantome) coute a peine
+# moins (~2,0 A mesure juste apres le mouvement) et n'est plus "droit".
 STAND = {
-    "HeadYaw": 0.0, "HeadPitch": -0.10,
+    "HeadYaw": 0.0, "HeadPitch": 0.10,
     "HipRoll": 0.0, "HipPitch": -0.03, "KneePitch": 0.0,
     "LShoulderPitch": 1.55, "LShoulderRoll": 0.10, "LElbowYaw": -1.20,
     "LElbowRoll": -0.10, "LWristYaw": 0.0, "LHand": 0.60,
     "RShoulderPitch": 1.55, "RShoulderRoll": -0.10, "RElbowYaw": 1.20,
     "RElbowRoll": 0.10, "RWristYaw": 0.0, "RHand": 0.60,
 }
-ARMS = ["LShoulderPitch", "LShoulderRoll", "LElbowYaw", "LElbowRoll", "LWristYaw",
-        "RShoulderPitch", "RShoulderRoll", "RElbowYaw", "RElbowRoll", "RWristYaw"]
+
+
+def relax_arms(motion):
+    """Bras sans courant, mains tenues (doigts qui bougent). Par chaine : une
+    liste d'articulations avec une seule valeur est ignoree sans erreur."""
+    for chain in ("LArm", "RArm"):
+        motion.setStiffnesses(chain, 0.0)
+    for hand in ("LHand", "RHand"):
+        motion.setStiffnesses(hand, 1.0)
+
+HELD = ["HipPitch", "KneePitch", "HipRoll", "HeadPitch", "HeadYaw"]
 EYES_LISTEN = 0x002040           # bleu pale : 3PO ecoute
 
 DIALOGUE = "3PO/Dialogue"
@@ -133,11 +143,21 @@ class Companion(object):
         self.motion.angleInterpolation(names, [STAND[n] for n in names],
                                        [duration] * len(names), True)
         time.sleep(0.5)
-        self.motion.setStiffnesses(ARMS, 0.0)   # bras pendants, sans courant
-        # HipRoll n'atteint pas 0 et force en permanence (cf. halloween.py) :
-        # consigne = position reelle
-        self.motion.setAngles("HipRoll", self.motion.getAngles("HipRoll", True)[0], 0.05)
+        relax_arms(self.motion)                 # bras pendants, sans courant
+        self.settle()
         self.eyes()
+
+    def settle(self):
+        """Consigne = position reelle : le moteur ne force plus pour atteindre
+        une consigne qu'il n'atteint pas (cf. HipRoll dans halloween.py)."""
+        for j in HELD:
+            self.motion.setAngles(j, self.motion.getAngles(j, True)[0], 0.05)
+
+    def head_home(self):
+        """Fin d'ecoute : la tete, qui suivait la voix, revient a sa place."""
+        self.motion.angleInterpolation(["HeadYaw", "HeadPitch"],
+                                       [STAND["HeadYaw"], STAND["HeadPitch"]], 1.0, True)
+        self.settle()
 
     def wiggle_fingers(self):
         now = time.time()
@@ -201,6 +221,7 @@ class Companion(object):
         self.listening = False
         self.mem.insertData(STATE, "pause")
         self.eyes()
+        self.head_home()
         log("en pause (%.0f s d'ecoute)" % (time.time() - t0))
 
     def run(self):
